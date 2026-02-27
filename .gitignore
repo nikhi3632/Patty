@@ -1,0 +1,58 @@
+# Claude
+.claude
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# Project docs (local only)
+CLAUDE.md
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.venv/
+venv/
+
+# Node
+node_modules/
+.next/
+out/
+.pnp
+.pnp.*
+.yarn/
+.vercel
+*.tsbuildinfo
+next-env.d.ts
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Secrets
+*.pem
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+
+# Docs
+NOTES.md
+PRODUCT.md
+TECHNICAL.md
+FUTURE.md
+test_data/

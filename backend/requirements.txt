@@ -1,0 +1,8 @@
+fastapi==0.115.0
+uvicorn==0.30.6
+python-dotenv==1.0.1
+supabase==2.13.0
+anthropic==0.52.0
+python-multipart==0.0.18
+pytest==8.3.4
+ruff==0.9.10
