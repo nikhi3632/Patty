@@ -34,7 +34,7 @@ db-migrate:
 # Drop and recreate all tables
 db-reset:
 	@export $$(grep '^DATABASE_URL=' backend/.env | xargs) && \
-	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
+	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS emails, suppliers, trends, menu_parses, restaurant_commodities, wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
 	$(MAKE) db-migrate
 
 # Seed with test data (inserts restaurants + uploads menu files to storage)

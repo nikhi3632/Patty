@@ -30,5 +30,5 @@ CREATE TABLE IF NOT EXISTS wholesale_prices (
   UNIQUE(commodity, terminal_market, report_date, package, origin)
 );
 
-CREATE INDEX idx_commodity_prices_lookup ON commodity_prices(commodity, state, year DESC, month DESC);
-CREATE INDEX idx_wholesale_prices_lookup ON wholesale_prices(commodity, terminal_market, report_date DESC);
+CREATE INDEX IF NOT EXISTS idx_commodity_prices_lookup ON commodity_prices(commodity, state, year DESC, month DESC);
+CREATE INDEX IF NOT EXISTS idx_wholesale_prices_lookup ON wholesale_prices(commodity, terminal_market, report_date DESC);
