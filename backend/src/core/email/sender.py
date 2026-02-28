@@ -9,6 +9,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import safe_request
 
 
 def build_map_url(address: str, lat: float = None, lng: float = None) -> str:
@@ -39,31 +40,33 @@ def lookup_restaurant_website(name: str, address: str) -> str:
         return ""
 
     try:
-        find_resp = httpx.get(
-            "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
-            params={
-                "input": f"{name} {address}",
-                "inputtype": "textquery",
-                "fields": "place_id",
-                "key": api_key,
-            },
-            timeout=10,
-        )
+        with safe_request():
+            find_resp = httpx.get(
+                "https://maps.googleapis.com/maps/api/place/findplacefromtext/json",
+                params={
+                    "input": f"{name} {address}",
+                    "inputtype": "textquery",
+                    "fields": "place_id",
+                    "key": api_key,
+                },
+                timeout=10,
+            )
         candidates = find_resp.json().get("candidates", [])
         if not candidates:
             return ""
 
         place_id = candidates[0]["place_id"]
 
-        details_resp = httpx.get(
-            "https://maps.googleapis.com/maps/api/place/details/json",
-            params={
-                "place_id": place_id,
-                "fields": "website",
-                "key": api_key,
-            },
-            timeout=10,
-        )
+        with safe_request():
+            details_resp = httpx.get(
+                "https://maps.googleapis.com/maps/api/place/details/json",
+                params={
+                    "place_id": place_id,
+                    "fields": "website",
+                    "key": api_key,
+                },
+                timeout=10,
+            )
         return details_resp.json().get("result", {}).get("website", "")
     except Exception:
         return ""
@@ -276,18 +279,19 @@ def send_email(supabase_client, email_id: str) -> dict:
         restaurant_website=restaurant_website,
     )
 
-    resp = httpx.post(
-        "https://api.resend.com/emails",
-        json={
-            "from": email.data["from_email"],
-            "to": [to_email],
-            "subject": email.data["subject"],
-            "text": email.data["body"],
-            "html": html_body,
-        },
-        headers={"Authorization": f"Bearer {resend_key}"},
-        timeout=30,
-    )
+    with safe_request():
+        resp = httpx.post(
+            "https://api.resend.com/emails",
+            json={
+                "from": email.data["from_email"],
+                "to": [to_email],
+                "subject": email.data["subject"],
+                "text": email.data["body"],
+                "html": html_body,
+            },
+            headers={"Authorization": f"Bearer {resend_key}"},
+            timeout=30,
+        )
 
     if resp.status_code not in (200, 201):
         return {"error": f"Resend API error: {resp.status_code} {resp.text}"}

@@ -5,8 +5,7 @@ from src.core.menu.parser import (
     build_vision_content,
     normalize_ingredient,
     get_parent_categories,
-    get_past_corrections,
-    build_corrections_prompt,
+    build_correction_hints,
     format_parent_list,
     call_vision_llm,
     resolve_commodity_ids,
@@ -104,45 +103,144 @@ def test_format_parent_list_empty():
     assert format_parent_list([]) == ""
 
 
-# --- Unit tests for past corrections ---
+# --- Unit tests for build_correction_hints ---
 
 
-def test_get_past_corrections_returns_user_added():
+def test_build_correction_hints_no_data():
     mock_client = MagicMock()
-    mock_client.table().select().eq().execute.return_value = MagicMock(
-        data=[
-            {"raw_ingredient_name": "butter", "status": "tracked"},
-            {"raw_ingredient_name": "sriracha", "status": "other"},
-        ]
+    # System rows query
+    mock_client.table().select().eq().execute.return_value = MagicMock(data=[])
+    # User-added query
+    mock_client.table().select().eq().is_.return_value.execute.return_value = MagicMock(
+        data=[]
     )
 
-    corrections = get_past_corrections(mock_client)
-    assert len(corrections) == 1
-    assert corrections[0]["name"] == "butter"
-    assert corrections[0]["action"] == "added_to_tracked"
+    result = build_correction_hints(mock_client)
+    assert result == ""
 
 
-def test_get_past_corrections_empty():
+def test_build_correction_hints_false_positives_bootstrap():
+    """Under 10 restaurants, uses 30% threshold."""
     mock_client = MagicMock()
+
+    # System rows: lemon extracted at 3 restaurants, deleted at 2
+    system_data = [
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r1",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": "2026-01-01",
+        },
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r2",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": "2026-01-02",
+        },
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r3",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": None,
+        },
+        {
+            "raw_ingredient_name": "salmon",
+            "restaurant_id": "r1",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": None,
+        },
+        {
+            "raw_ingredient_name": "salmon",
+            "restaurant_id": "r2",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": None,
+        },
+        {
+            "raw_ingredient_name": "salmon",
+            "restaurant_id": "r3",
+            "original_status": "tracked",
+            "status": "tracked",
+            "deleted_at": None,
+        },
+    ]
+    mock_client.table().select().eq().execute.return_value = MagicMock(data=system_data)
+
+    # User-added: none
+    mock_client.table().select().eq().is_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+
+    result = build_correction_hints(mock_client)
+    assert "lemon" in result
+    assert "DO NOT extract" in result
+    assert "salmon" not in result
+
+
+def test_build_correction_hints_false_negatives():
+    """User-added items at 2+ restaurants appear as false negatives."""
+    mock_client = MagicMock()
+
+    # No system rows
     mock_client.table().select().eq().execute.return_value = MagicMock(data=[])
 
-    corrections = get_past_corrections(mock_client)
-    assert corrections == []
-
-
-def test_build_corrections_prompt_with_data():
-    corrections = [
-        {"name": "butter", "action": "added_to_tracked"},
-        {"name": "kale", "action": "added_to_tracked"},
+    # User-added: butter at 3 restaurants
+    user_data = [
+        {"raw_ingredient_name": "butter", "restaurant_id": "r1"},
+        {"raw_ingredient_name": "butter", "restaurant_id": "r2"},
+        {"raw_ingredient_name": "butter", "restaurant_id": "r3"},
     ]
-    result = build_corrections_prompt(corrections)
+    mock_client.table().select().eq().is_.return_value.execute.return_value = MagicMock(
+        data=user_data
+    )
+
+    result = build_correction_hints(mock_client)
     assert "butter" in result
-    assert "kale" in result
-    assert "previously missed" in result
+    assert "LOOK CAREFULLY" in result
 
 
-def test_build_corrections_prompt_empty():
-    assert build_corrections_prompt([]) == ""
+def test_build_correction_hints_demotions_count():
+    """Demoted items (original_status=tracked, status=other) count as false positives."""
+    mock_client = MagicMock()
+
+    # Lemon demoted at 3 restaurants (not deleted, just status changed)
+    system_data = [
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r1",
+            "original_status": "tracked",
+            "status": "other",
+            "deleted_at": None,
+        },
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r2",
+            "original_status": "tracked",
+            "status": "other",
+            "deleted_at": None,
+        },
+        {
+            "raw_ingredient_name": "lemon",
+            "restaurant_id": "r3",
+            "original_status": "tracked",
+            "status": "other",
+            "deleted_at": None,
+        },
+    ]
+    mock_client.table().select().eq().execute.return_value = MagicMock(data=system_data)
+
+    # No user-added
+    mock_client.table().select().eq().is_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+
+    result = build_correction_hints(mock_client)
+    assert "lemon" in result
+    assert "DO NOT extract" in result
 
 
 # --- Unit tests for resolve_commodity_ids ---
@@ -283,12 +381,17 @@ def test_store_parse_results_first_upload():
         ]
     )
 
-    # "other" items: select returns empty (none exist yet)
-    rc_table.select.return_value.eq.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
+    # upsert_commodity: select returns empty (no existing active rows)
+    rc_table.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
         data=[]
     )
 
-    # insert returns 2 rows
+    # "other" unmatched items: select for existing returns empty
+    rc_table.select.return_value.eq.return_value.is_.return_value.in_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+
+    # insert returns rows
     rc_table.insert.return_value.execute.return_value = MagicMock(
         data=[{"id": 1}, {"id": 2}]
     )
@@ -332,6 +435,11 @@ def test_store_parse_results_classifies_by_price_data():
         ]
     )
 
+    # upsert_commodity: select returns empty (no existing active rows)
+    rc_table.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+
     result = store_parse_results(
         mock_client,
         "rest-1",
@@ -344,11 +452,11 @@ def test_store_parse_results_classifies_by_price_data():
     assert result["tracked"] == 1
     assert result["other"] == 1
 
-    # Verify the upsert calls used correct statuses
-    upsert_calls = rc_table.upsert.call_args_list
-    assert len(upsert_calls) == 2
-    assert upsert_calls[0][0][0]["status"] == "tracked"
-    assert upsert_calls[1][0][0]["status"] == "other"
+    # Verify the insert calls used correct statuses
+    insert_calls = rc_table.insert.call_args_list
+    assert len(insert_calls) == 2
+    assert insert_calls[0][0][0]["status"] == "tracked"
+    assert insert_calls[1][0][0]["status"] == "other"
 
 
 def test_store_parse_results_resolves_other_against_registry():
@@ -388,8 +496,13 @@ def test_store_parse_results_resolves_other_against_registry():
         ]
     )
 
-    # No existing other items
-    rc_table.select.return_value.eq.return_value.eq.return_value.in_.return_value.execute.return_value = MagicMock(
+    # upsert_commodity: select returns empty (no existing active rows)
+    rc_table.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
+        data=[]
+    )
+
+    # No existing unmatched other items
+    rc_table.select.return_value.eq.return_value.is_.return_value.in_.return_value.execute.return_value = MagicMock(
         data=[]
     )
     rc_table.insert.return_value.execute.return_value = MagicMock(data=[{"id": 1}])

@@ -53,6 +53,12 @@ export default function Home() {
         <Processing
           restaurantId={restaurantId}
           onComplete={handleProcessingComplete}
+          onReset={() => {
+            localStorage.removeItem(LS_KEY);
+            setActiveId(null);
+            setProcessing(false);
+            setCleared(true);
+          }}
         />
       )}
       {view === "dashboard" && restaurantId && (

@@ -7,6 +7,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from src.config import get
+from src.core.http import safe_request
 
 
 def haversine(lat1: float, lng1: float, lat2: float, lng2: float) -> float:
@@ -39,11 +40,12 @@ def geocode_full(query: str) -> tuple[float, float, str] | None:
     if not api_key:
         return None
     try:
-        resp = httpx.get(
-            "https://maps.googleapis.com/maps/api/geocode/json",
-            params={"address": query, "key": api_key},
-            timeout=10,
-        )
+        with safe_request():
+            resp = httpx.get(
+                "https://maps.googleapis.com/maps/api/geocode/json",
+                params={"address": query, "key": api_key},
+                timeout=10,
+            )
         if resp.status_code == 200:
             results = resp.json().get("results", [])
             if results:

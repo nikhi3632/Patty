@@ -51,8 +51,4 @@ htmlcov/
 .pytest_cache/
 
 # Docs
-NOTES.md
-PRODUCT.md
-TECHNICAL.md
-FUTURE.md
 test_data/

@@ -6,6 +6,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import redact, safe_request
 from src.core.pricing.interruptible import InterruptHandler
 
 
@@ -35,13 +36,15 @@ def fetch_nass_prices(
 
     data = []
     for attempt in range(5):
-        resp = httpx.get(f"{base}/api_GET/", params=params, timeout=30)
+        with safe_request():
+            resp = httpx.get(f"{base}/api_GET/", params=params, timeout=30)
         if resp.status_code == 400:
             # NASS returns 400 when no data matches the query — not an error
             return []
         if resp.status_code != 200:
             if attempt == 4:
-                resp.raise_for_status()
+                with safe_request():
+                    resp.raise_for_status()
             time.sleep(5 * (2**attempt))
             continue
         try:
@@ -137,8 +140,9 @@ def fetch_all_nass_prices(supabase_client, state: str = "US", months: int = 12) 
                 total += count
                 print(f"  [{i}/{total_commodities}] {commodity_desc}: {count} prices")
             except Exception as e:
-                errors.append({"commodity": commodity_desc, "error": str(e)})
-                print(f"  [{i}/{total_commodities}] {commodity_desc}: ERROR {e}")
+                msg = redact(str(e))
+                errors.append({"commodity": commodity_desc, "error": msg})
+                print(f"  [{i}/{total_commodities}] {commodity_desc}: ERROR {msg}")
             time.sleep(1)
 
     return {"total_prices": total, "errors": errors}

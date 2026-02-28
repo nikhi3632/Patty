@@ -123,51 +123,130 @@ def fetch_menu_files(supabase_client, restaurant_id: str) -> list[dict]:
     return files
 
 
-def get_past_corrections(supabase_client) -> list[dict]:
-    """Fetch user corrections from past reviews across all restaurants.
+def build_correction_hints(supabase_client) -> str:
+    """Build correction hints from cross-restaurant user patterns.
 
-    Returns list of {"name": str, "action": str} where action is one of:
-    - "removed_from_tracked" — user demoted/deleted a system-tracked item
-    - "added_to_tracked" — user added an ingredient the system missed
-    - "removed_from_other" — user deleted a hallucinated ingredient
+    False positives (rate-based): system-extracted items users deleted or demoted.
+    Uses correction_rate >= dynamic threshold (mean + 1.5*std of all rates).
+    Bootstrap: 30% threshold when <10 restaurants processed.
+
+    False negatives (count-based): user-added items at N+ distinct restaurants.
+    Bootstrap: min_count 2 when <10 restaurants. Distribution-based after.
+
+    Absolute floor: min_count 2 always. One correction is never signal.
     """
-    # User-added ingredients (system missed these)
-    added = (
+    # --- False positives (rate-based) ---
+
+    # All system-extracted rows — need both extractions and corrections
+    system_rows = (
         supabase_client.table("restaurant_commodities")
-        .select("raw_ingredient_name, status")
-        .eq("added_by", "user")
+        .select(
+            "raw_ingredient_name, restaurant_id, original_status, status, deleted_at"
+        )
+        .eq("added_by", "system")
         .execute()
     )
 
-    corrections = []
+    # Count distinct restaurants per ingredient: total extractions + corrections
+    extraction_restaurants = {}
+    correction_restaurants = {}
+    all_restaurant_ids = set()
+
+    for row in system_rows.data:
+        name = row["raw_ingredient_name"]
+        rid = row["restaurant_id"]
+        all_restaurant_ids.add(rid)
+        extraction_restaurants.setdefault(name, set()).add(rid)
+        is_deleted = row["deleted_at"] is not None
+        is_demoted = row["original_status"] == "tracked" and row["status"] == "other"
+        if is_deleted or is_demoted:
+            correction_restaurants.setdefault(name, set()).add(rid)
+
+    total_restaurants = len(all_restaurant_ids)
+    min_sample = 3
+    min_count = 2
+
+    # Compute per-ingredient correction rates (only where sample >= min_sample)
+    rates = {}
+    for name, ext_rids in extraction_restaurants.items():
+        if len(ext_rids) >= min_sample:
+            corr_count = len(correction_restaurants.get(name, set()))
+            rates[name] = corr_count / len(ext_rids)
+
+    # Dynamic threshold from rate distribution
+    # NOTE: correction rate distribution is right-skewed (most items at 0%).
+    # mean + 1.5*std works at small scale. If threshold becomes too
+    # aggressive at 500+ restaurants, switch to median + MAD for robustness.
+    if total_restaurants < 10:
+        fp_threshold = 0.3
+    elif rates:
+        rate_values = list(rates.values())
+        avg = sum(rate_values) / len(rate_values)
+        variance = sum((r - avg) ** 2 for r in rate_values) / len(rate_values)
+        std = variance**0.5
+        fp_threshold = avg + 1.5 * std
+    else:
+        fp_threshold = 0.3
+
+    false_positives = []
+    for name, rate in rates.items():
+        corr_count = len(correction_restaurants.get(name, set()))
+        if rate >= fp_threshold and corr_count >= min_count:
+            false_positives.append((name, corr_count, int(rate * 100)))
+
+    # --- False negatives (count-based) ---
+
+    added = (
+        supabase_client.table("restaurant_commodities")
+        .select("raw_ingredient_name, restaurant_id")
+        .eq("added_by", "user")
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    fn_counts = {}
     for row in added.data:
-        if row["status"] == "tracked":
-            corrections.append(
-                {"name": row["raw_ingredient_name"], "action": "added_to_tracked"}
+        name = row["raw_ingredient_name"]
+        fn_counts.setdefault(name, set()).add(row["restaurant_id"])
+
+    if total_restaurants < 10:
+        fn_threshold = min_count
+    elif fn_counts:
+        count_values = [len(rids) for rids in fn_counts.values()]
+        avg = sum(count_values) / len(count_values)
+        variance = sum((c - avg) ** 2 for c in count_values) / len(count_values)
+        std = variance**0.5
+        fn_threshold = max(min_count, avg + 1.5 * std)
+    else:
+        fn_threshold = min_count
+
+    false_negatives = [
+        (name, len(rids))
+        for name, rids in fn_counts.items()
+        if len(rids) >= fn_threshold and len(rids) >= min_count
+    ]
+
+    # --- Build prompt ---
+
+    if not false_positives and not false_negatives:
+        return ""
+
+    sections = ["\n\nBased on corrections from previous restaurants:"]
+
+    if false_positives:
+        sections.append(
+            "\nDO NOT extract these unless explicitly listed as a standalone item:"
+        )
+        for name, count, pct in sorted(false_positives, key=lambda x: -x[2]):
+            sections.append(
+                f"- {name} (corrected {pct}% of the time across {count} restaurants)"
             )
 
-    return corrections
+    if false_negatives:
+        sections.append("\nLOOK CAREFULLY for these, they are commonly missed:")
+        for name, count in sorted(false_negatives, key=lambda x: -x[1]):
+            sections.append(f"- {name} (added manually at {count} restaurants)")
 
-
-def build_corrections_prompt(corrections: list[dict]) -> str:
-    """Build a prompt section from past user corrections."""
-    if not corrections:
-        return ""
-
-    lines = []
-    added = [c["name"] for c in corrections if c["action"] == "added_to_tracked"]
-
-    if added:
-        lines.append(
-            "Ingredients the system previously missed that users had to add manually: "
-            + ", ".join(added)
-            + ". Make sure to check for these."
-        )
-
-    if not lines:
-        return ""
-
-    return "\n\nLearnings from past reviews:\n" + "\n".join(lines)
+    return "\n".join(sections)
 
 
 def format_parent_list(parent_entries: list[dict]) -> str:
@@ -270,6 +349,54 @@ def resolve_commodity_ids(supabase_client, names: list[str]) -> dict:
     return resolved
 
 
+def upsert_commodity(
+    supabase_client,
+    restaurant_id,
+    info,
+    name,
+    status,
+    tracked_count,
+    other_matched_count,
+):
+    """Insert or update a commodity row, respecting soft deletes.
+
+    If an active row exists for this restaurant+commodity, update it.
+    Otherwise insert a new row (even if a soft-deleted row exists).
+    """
+    existing = (
+        supabase_client.table("restaurant_commodities")
+        .select("id")
+        .eq("restaurant_id", restaurant_id)
+        .eq("commodity_id", info["id"])
+        .is_("deleted_at", "null")
+        .execute()
+    )
+    if existing.data:
+        supabase_client.table("restaurant_commodities").update(
+            {
+                "raw_ingredient_name": name,
+                "status": status,
+            }
+        ).eq("id", existing.data[0]["id"]).execute()
+    else:
+        supabase_client.table("restaurant_commodities").insert(
+            {
+                "restaurant_id": restaurant_id,
+                "commodity_id": info["id"],
+                "raw_ingredient_name": name,
+                "status": status,
+                "original_status": status,
+                "added_by": "system",
+            }
+        ).execute()
+
+    if status == "tracked":
+        tracked_count += 1
+    else:
+        other_matched_count += 1
+    return tracked_count, other_matched_count
+
+
 def store_parse_results(
     supabase_client,
     restaurant_id: str,
@@ -284,7 +411,7 @@ def store_parse_results(
     - LLM matched + has_price_data=false → status "other" (commodity_id set)
     - LLM unmatched                      → status "other" (commodity_id null)
 
-    For re-uploads: upserts matched items, skips existing "other" items.
+    For re-uploads: inserts new items, updates existing active items.
     Returns {"tracked": count, "other": count}.
     """
     # Audit trail
@@ -299,7 +426,7 @@ def store_parse_results(
     # Resolve parent names to commodity IDs + price availability
     commodity_map = resolve_commodity_ids(supabase_client, tracked_parents)
 
-    # Upsert matched items — status based on has_price_data
+    # Insert or update matched items — status based on has_price_data
     tracked_count = 0
     other_matched_count = 0
     for parent in tracked_parents:
@@ -308,20 +435,15 @@ def store_parse_results(
             continue
 
         status = "tracked" if info["has_price_data"] else "other"
-        supabase_client.table("restaurant_commodities").upsert(
-            {
-                "restaurant_id": restaurant_id,
-                "commodity_id": info["id"],
-                "raw_ingredient_name": parent,
-                "status": status,
-                "added_by": "system",
-            },
-            on_conflict="restaurant_id,commodity_id",
-        ).execute()
-        if status == "tracked":
-            tracked_count += 1
-        else:
-            other_matched_count += 1
+        tracked_count, other_matched_count = upsert_commodity(
+            supabase_client,
+            restaurant_id,
+            info,
+            parent,
+            status,
+            tracked_count,
+            other_matched_count,
+        )
 
     # Resolve "other" items against the registry too (catches LLM misclassifications)
     other_names = []
@@ -334,26 +456,21 @@ def store_parse_results(
         resolve_commodity_ids(supabase_client, other_names) if other_names else {}
     )
 
-    # "Other" items that matched the registry — upsert with commodity_id
+    # "Other" items that matched the registry
     for name in other_names:
         info = other_resolved.get(name)
         if not info:
             continue
         status = "tracked" if info["has_price_data"] else "other"
-        supabase_client.table("restaurant_commodities").upsert(
-            {
-                "restaurant_id": restaurant_id,
-                "commodity_id": info["id"],
-                "raw_ingredient_name": name,
-                "status": status,
-                "added_by": "system",
-            },
-            on_conflict="restaurant_id,commodity_id",
-        ).execute()
-        if status == "tracked":
-            tracked_count += 1
-        else:
-            other_matched_count += 1
+        tracked_count, other_matched_count = upsert_commodity(
+            supabase_client,
+            restaurant_id,
+            info,
+            name,
+            status,
+            tracked_count,
+            other_matched_count,
+        )
 
     # Truly unmatched "other" items — insert with no commodity_id
     unmatched_names = [n for n in other_names if n not in other_resolved]
@@ -363,7 +480,7 @@ def store_parse_results(
             supabase_client.table("restaurant_commodities")
             .select("raw_ingredient_name")
             .eq("restaurant_id", restaurant_id)
-            .eq("status", "other")
+            .is_("deleted_at", "null")
             .in_("raw_ingredient_name", unmatched_names)
             .execute()
         )
@@ -374,6 +491,7 @@ def store_parse_results(
                 "commodity_id": None,
                 "raw_ingredient_name": name,
                 "status": "other",
+                "original_status": "other",
                 "added_by": "system",
             }
             for name in unmatched_names
@@ -407,8 +525,7 @@ def parse_menu(supabase_client, restaurant_id: str) -> dict:
     if not files:
         return {"tracked": 0, "other": 0, "raw_response": {"tracked": [], "other": []}}
 
-    corrections = get_past_corrections(supabase_client)
-    corrections_prompt = build_corrections_prompt(corrections)
+    corrections_prompt = build_correction_hints(supabase_client)
     raw_response = call_vision_llm(files, parent_entries, corrections_prompt)
 
     parent_set = set(entry["parent"] for entry in parent_entries)

@@ -109,8 +109,8 @@ export default function Onboarding({ onAnalyzeStart }: Props) {
 
       const result = await analyze(form);
       onAnalyzeStart(result.restaurant_id);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Something went wrong");
+    } catch {
+      setError("Something went wrong uploading your menu. Please try again.");
       setLoading(false);
     }
   }
@@ -204,7 +204,9 @@ export default function Onboarding({ onAnalyzeStart }: Props) {
           )}
 
           {error && (
-            <p className="text-sm text-destructive">{error}</p>
+            <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-sm text-destructive">
+              {error}
+            </div>
           )}
 
           <Button

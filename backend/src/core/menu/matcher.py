@@ -135,12 +135,13 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
         has_data = commodity.data["has_price_data"] if commodity.data else False
         status = "tracked" if has_data else "other"
 
-        # Check if already exists for this commodity
+        # Check if already exists for this commodity (active rows only)
         existing = (
             supabase_client.table("restaurant_commodities")
             .select("id, status")
             .eq("restaurant_id", restaurant_id)
             .eq("commodity_id", match["commodity_id"])
+            .is_("deleted_at", "null")
             .execute()
         )
         if existing.data:
@@ -172,6 +173,7 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
                     "commodity_id": match["commodity_id"],
                     "raw_ingredient_name": match["matched_parent"],
                     "status": status,
+                    "original_status": status,
                     "added_by": "user",
                 }
             )
@@ -185,6 +187,7 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
             .eq("restaurant_id", restaurant_id)
             .eq("raw_ingredient_name", name)
             .eq("status", "other")
+            .is_("deleted_at", "null")
             .execute()
         )
         if existing.data:
@@ -201,6 +204,7 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
                     "commodity_id": None,
                     "raw_ingredient_name": name,
                     "status": "other",
+                    "original_status": "other",
                     "added_by": "user",
                 }
             )

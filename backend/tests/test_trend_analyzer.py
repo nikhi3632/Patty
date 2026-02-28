@@ -681,7 +681,7 @@ def test_compute_trends_full_flow(mock_coords):
         if name == "restaurants":
             t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif name == "restaurant_commodities":
-            t.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_tracked
+            t.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = mock_tracked
         elif name == "commodities":
             call_count["commodities"] += 1
             if call_count["commodities"] <= 1:
@@ -761,7 +761,7 @@ def test_compute_trends_no_data(mock_coords):
         if name == "restaurants":
             t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif name == "restaurant_commodities":
-            t.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_tracked
+            t.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = mock_tracked
         elif name == "commodities":
             t.select.return_value.eq.return_value.eq.return_value.execute.return_value = empty
         elif name == "commodity_calibrations":

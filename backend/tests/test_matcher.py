@@ -129,14 +129,14 @@ def make_add_client(
             data=commodity_data
         )
 
-    # restaurant_commodities.select("id, status").eq("restaurant_id", ...).eq("commodity_id", ...).execute()
+    # restaurant_commodities.select("id, status").eq("restaurant_id", ...).eq("commodity_id", ...).is_("deleted_at", "null").execute()
     if rc_data is not None:
-        rc_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        rc_table.select.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
             data=rc_data
         )
 
-    # For "other" path: .select().eq().eq().eq().execute()
-    rc_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+    # For "other" path: .select().eq().eq().eq().is_().execute()
+    rc_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.is_.return_value.execute.return_value = MagicMock(
         data=rc_data or []
     )
 

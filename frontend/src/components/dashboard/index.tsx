@@ -189,12 +189,22 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
   if (!confirmed) {
     return (
       <div className="mx-auto max-w-xl px-4 py-12">
-        <div className="mb-6">
-          <h1 className="text-xl font-semibold tracking-tight">Patty</h1>
-          <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
-          <p className="mt-2 text-sm text-muted-foreground">
-            We scanned your menu and found these ingredients. Review and start tracking.
-          </p>
+        <div className="mb-6 flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Patty</h1>
+            <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
+            <p className="mt-2 text-sm text-muted-foreground">
+              We scanned your menu and found these ingredients. Review and start tracking.
+            </p>
+          </div>
+          {onNewRestaurant && (
+            <button
+              onClick={onNewRestaurant}
+              className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            >
+              Reset
+            </button>
+          )}
         </div>
         <Commodities
           restaurantId={restaurantId}
@@ -243,7 +253,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
               onClick={onNewRestaurant}
               className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
             >
-              + New Restaurant
+              Reset
             </button>
           )}
         </div>

@@ -5,6 +5,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import safe_request
 from src.core.geo import haversine, geocode
 
 # Cache: populated once on first call
@@ -12,10 +13,11 @@ terminal_markets_cache = None  # {city: {"lat": float, "lng": float, "slugs": [s
 
 
 def fetch_terminal_markets() -> dict:
-    resp = httpx.get(
-        f"{get('MYMARKET_NEWS_BASE_URL')}/reports",
-        auth=(get("MYMARKET_NEWS_API_KEY"), ""),
-    )
+    with safe_request():
+        resp = httpx.get(
+            f"{get('MYMARKET_NEWS_BASE_URL')}/reports",
+            auth=(get("MYMARKET_NEWS_API_KEY"), ""),
+        )
     reports = resp.json()
 
     markets = {}

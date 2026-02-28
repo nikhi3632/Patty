@@ -7,6 +7,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import redact, safe_request
 from src.core.pricing.interruptible import InterruptHandler
 
 
@@ -29,12 +30,13 @@ def fetch_mars_prices(
     sections = []
     for attempt in range(5):
         try:
-            resp = httpx.get(
-                f"{base}/reports/{slug_id}",
-                params=params,
-                auth=(key, ""),
-                timeout=60,
-            )
+            with safe_request():
+                resp = httpx.get(
+                    f"{base}/reports/{slug_id}",
+                    params=params,
+                    auth=(key, ""),
+                    timeout=60,
+                )
             sections = resp.json()
             break
         except (httpx.ReadError, httpx.ConnectError, httpx.RemoteProtocolError):
@@ -193,7 +195,8 @@ def fetch_all_mars_prices(supabase_client) -> dict:
                 total += count
                 print(f"  [{i}/{len(slug_meta)}] slug {slug_id}: {count} prices")
             except Exception as e:
-                errors.append({"slug_id": slug_id, "error": str(e)})
-                print(f"  [{i}/{len(slug_meta)}] slug {slug_id}: ERROR {e}")
+                msg = redact(str(e))
+                errors.append({"slug_id": slug_id, "error": msg})
+                print(f"  [{i}/{len(slug_meta)}] slug {slug_id}: ERROR {msg}")
 
     return {"total_prices": total, "slugs_fetched": len(seen_slugs), "errors": errors}

@@ -25,21 +25,23 @@ def mock_supabase_list(data):
 
 @patch("src.api.routes.supabase")
 def test_list_commodities(mock_sb):
-    mock_sb.table().select().eq().order().order().execute.return_value = MagicMock(
-        data=[
-            {
-                "id": "rc-1",
-                "raw_ingredient_name": "tomatoes",
-                "status": "tracked",
-                "commodities": {"parent": "tomatoes", "display_name": "Tomatoes"},
-            },
-            {
-                "id": "rc-2",
-                "raw_ingredient_name": "truffle",
-                "status": "other",
-                "commodities": None,
-            },
-        ]
+    mock_sb.table().select().eq().is_().order().order().execute.return_value = (
+        MagicMock(
+            data=[
+                {
+                    "id": "rc-1",
+                    "raw_ingredient_name": "tomatoes",
+                    "status": "tracked",
+                    "commodities": {"parent": "tomatoes", "display_name": "Tomatoes"},
+                },
+                {
+                    "id": "rc-2",
+                    "raw_ingredient_name": "truffle",
+                    "status": "other",
+                    "commodities": None,
+                },
+            ]
+        )
     )
 
     resp = client.get(f"/api/restaurants/{RESTAURANT_ID}/commodities")
@@ -54,17 +56,17 @@ def test_list_commodities(mock_sb):
 
 
 @patch("src.api.routes.supabase")
-def test_update_commodity_confirm(mock_sb):
+def test_update_commodity_automation_pref(mock_sb):
     mock_sb.table().update().eq().execute.return_value = MagicMock(
-        data=[{"id": "rc-1", "user_confirmed": True}]
+        data=[{"id": "rc-1", "automation_pref": "full_auto"}]
     )
 
     resp = client.patch(
         "/api/restaurant-commodities/rc-1",
-        json={"user_confirmed": True},
+        json={"automation_pref": "full_auto"},
     )
     assert resp.status_code == 200
-    assert resp.json()["data"]["user_confirmed"] is True
+    assert resp.json()["data"]["automation_pref"] == "full_auto"
 
 
 @patch("src.api.routes.supabase")
@@ -91,7 +93,7 @@ def test_update_commodity_not_found(mock_sb):
 
     resp = client.patch(
         "/api/restaurant-commodities/nonexistent",
-        json={"user_confirmed": True},
+        json={"automation_pref": "review"},
     )
     assert resp.status_code == 404
 
@@ -101,7 +103,7 @@ def test_update_commodity_not_found(mock_sb):
 
 @patch("src.api.routes.supabase")
 def test_delete_commodity(mock_sb):
-    mock_sb.table().delete().eq().execute.return_value = MagicMock(
+    mock_sb.table().update().eq().is_().execute.return_value = MagicMock(
         data=[{"id": "rc-1"}]
     )
 
@@ -112,7 +114,7 @@ def test_delete_commodity(mock_sb):
 
 @patch("src.api.routes.supabase")
 def test_delete_commodity_not_found(mock_sb):
-    mock_sb.table().delete().eq().execute.return_value = MagicMock(data=[])
+    mock_sb.table().update().eq().is_().execute.return_value = MagicMock(data=[])
 
     resp = client.delete("/api/restaurant-commodities/nonexistent")
     assert resp.status_code == 404
@@ -169,20 +171,3 @@ def test_add_commodity_empty_name():
         json={"ingredient": "  "},
     )
     assert resp.status_code == 400
-
-
-# --- POST /api/restaurants/:id/commodities/confirm ---
-
-
-@patch("src.api.routes.supabase")
-def test_bulk_confirm(mock_sb):
-    mock_sb.table().update().eq().eq().execute.return_value = MagicMock(
-        data=[{"id": "rc-1"}]
-    )
-
-    resp = client.post(
-        f"/api/restaurants/{RESTAURANT_ID}/commodities/confirm",
-        json={"item_ids": ["rc-1", "rc-2"]},
-    )
-    assert resp.status_code == 200
-    assert resp.json()["confirmed"] == 2

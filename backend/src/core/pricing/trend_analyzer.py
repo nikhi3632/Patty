@@ -542,6 +542,7 @@ def compute_trends(supabase_client, restaurant_id: str) -> dict:
         .select("commodity_id, raw_ingredient_name, commodities(id, parent)")
         .eq("restaurant_id", restaurant_id)
         .eq("status", "tracked")
+        .is_("deleted_at", "null")
         .execute()
     )
 

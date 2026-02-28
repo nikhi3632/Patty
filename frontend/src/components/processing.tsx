@@ -7,6 +7,7 @@ import { Check, Loader2, AlertCircle, FileText } from "lucide-react";
 interface Props {
   restaurantId: string;
   onComplete: () => void;
+  onReset: () => void;
 }
 
 type StepStatus = "pending" | "running" | "done" | "error";
@@ -17,7 +18,7 @@ function stepDetail(result?: StreamEventResult): string {
   return `Found ${(result.tracked ?? 0) + (result.other ?? 0)} ingredients, tracking ${result.tracked ?? 0}`;
 }
 
-export default function Processing({ restaurantId, onComplete }: Props) {
+export default function Processing({ restaurantId, onComplete, onReset }: Props) {
   const [status, setStatus] = useState<StepStatus>("pending");
   const [detail, setDetail] = useState<string>("");
 
@@ -88,6 +89,14 @@ export default function Processing({ restaurantId, onComplete }: Props) {
             <p className={`text-center text-sm ${status === "error" ? "text-destructive" : "text-muted-foreground"}`}>
               {detail}
             </p>
+          )}
+          {status === "error" && (
+            <button
+              onClick={onReset}
+              className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            >
+              Reset
+            </button>
           )}
         </div>
       </div>

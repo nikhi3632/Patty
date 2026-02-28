@@ -10,6 +10,7 @@ import httpx
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import redact, safe_request
 from src.core.geo import haversine, geocode_full
 
 logger = logging.getLogger(__name__)
@@ -160,16 +161,17 @@ def search_tavily(query: str, max_results: int = 5) -> list[dict]:
         return []
 
     try:
-        resp = httpx.post(
-            "https://api.tavily.com/search",
-            json={
-                "query": query,
-                "max_results": max_results,
-                "include_answer": False,
-            },
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=30,
-        )
+        with safe_request():
+            resp = httpx.post(
+                "https://api.tavily.com/search",
+                json={
+                    "query": query,
+                    "max_results": max_results,
+                    "include_answer": False,
+                },
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
+            )
         if resp.status_code != 200:
             return []
         return resp.json().get("results", [])
@@ -184,12 +186,13 @@ def extract_tavily(urls: list[str]) -> list[dict]:
         return []
 
     try:
-        resp = httpx.post(
-            "https://api.tavily.com/extract",
-            json={"urls": urls},
-            headers={"Authorization": f"Bearer {api_key}"},
-            timeout=30,
-        )
+        with safe_request():
+            resp = httpx.post(
+                "https://api.tavily.com/extract",
+                json={"urls": urls},
+                headers={"Authorization": f"Bearer {api_key}"},
+                timeout=30,
+            )
         if resp.status_code != 200:
             return []
         return resp.json().get("results", [])
@@ -204,15 +207,16 @@ def search_hunter(domain: str, limit: int = 5) -> list[dict]:
         return []
 
     try:
-        resp = httpx.get(
-            "https://api.hunter.io/v2/domain-search",
-            params={
-                "domain": domain,
-                "api_key": api_key,
-                "limit": limit,
-            },
-            timeout=30,
-        )
+        with safe_request():
+            resp = httpx.get(
+                "https://api.hunter.io/v2/domain-search",
+                params={
+                    "domain": domain,
+                    "api_key": api_key,
+                    "limit": limit,
+                },
+                timeout=30,
+            )
         if resp.status_code != 200:
             return []
         data = resp.json().get("data", {})
@@ -600,6 +604,7 @@ def find_suppliers(supabase_client, restaurant_id: str) -> dict:
         .select("commodities(parent)")
         .eq("restaurant_id", restaurant_id)
         .eq("status", "tracked")
+        .is_("deleted_at", "null")
         .execute()
     )
     categories = list(
@@ -723,7 +728,9 @@ def find_suppliers(supabase_client, restaurant_id: str) -> dict:
 
             linked.append(supplier_row)
         except Exception as exc:
-            logger.warning("Failed to link supplier %s: %s", s.get("name"), exc)
+            logger.warning(
+                "Failed to link supplier %s: %s", s.get("name"), redact(str(exc))
+            )
 
     return {
         "restaurant_id": restaurant_id,

@@ -7,6 +7,7 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
+from src.core.http import safe_request
 
 MARS_MARKET_TYPES = {
     "Terminal",
@@ -31,14 +32,15 @@ def fetch_nass_commodities() -> list[dict]:
     base = get("NASS_BASE_URL")
     key = get("NASS_API_KEY")
 
-    resp = httpx.get(
-        f"{base}/get_param_values/",
-        params={
-            "key": key,
-            "param": "commodity_desc",
-            "statisticcat_desc": "PRICE RECEIVED",
-        },
-    )
+    with safe_request():
+        resp = httpx.get(
+            f"{base}/get_param_values/",
+            params={
+                "key": key,
+                "param": "commodity_desc",
+                "statisticcat_desc": "PRICE RECEIVED",
+            },
+        )
     names = resp.json().get("commodity_desc", [])
 
     rows = []
@@ -66,7 +68,8 @@ def discover_mars_reports() -> list[dict]:
     key = get("MYMARKET_NEWS_API_KEY")
     base = get("MYMARKET_NEWS_BASE_URL")
 
-    resp = httpx.get(f"{base}/reports", auth=(key, ""), timeout=30)
+    with safe_request():
+        resp = httpx.get(f"{base}/reports", auth=(key, ""), timeout=30)
     reports = resp.json()
 
     relevant = []
@@ -96,11 +99,12 @@ def find_latest_mars_date(reports: list[dict]) -> str:
 
     for report in reports:
         try:
-            resp = httpx.get(
-                f"{base}/reports/{report['slug_id']}",
-                auth=(key, ""),
-                timeout=15,
-            )
+            with safe_request():
+                resp = httpx.get(
+                    f"{base}/reports/{report['slug_id']}",
+                    auth=(key, ""),
+                    timeout=15,
+                )
             data = resp.json()
             if isinstance(data, dict) and data.get("results"):
                 return data["results"][0].get(
@@ -122,12 +126,13 @@ def extract_commodities_from_report(slug_id: int, report_date: str | None) -> li
         params["q"] = f"report_date={report_date}"
 
     try:
-        resp = httpx.get(
-            f"{base}/reports/{slug_id}",
-            params=params,
-            auth=(key, ""),
-            timeout=15,
-        )
+        with safe_request():
+            resp = httpx.get(
+                f"{base}/reports/{slug_id}",
+                params=params,
+                auth=(key, ""),
+                timeout=15,
+            )
         sections = resp.json()
         if not isinstance(sections, list):
             return []

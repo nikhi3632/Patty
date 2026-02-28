@@ -37,13 +37,13 @@ export default function EmailCard({ email, expanded, onToggle, onUpdate }: Props
         </div>
         <p className="truncate text-xs text-muted-foreground mt-0.5 pl-[22px]">
           &ldquo;{email.subject}&rdquo;
-          {email.sent_at && (
-            <span className="ml-1.5 text-muted-foreground/60">
-              &middot; sent {new Date(email.sent_at).toLocaleDateString()}{" "}
-              {new Date(email.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}
-            </span>
-          )}
         </p>
+        {email.sent_at && (
+          <p className="text-xs text-muted-foreground/60 mt-0.5 pl-[22px]">
+            sent {new Date(email.sent_at).toLocaleDateString()}{" "}
+            {new Date(email.sent_at).toLocaleTimeString([], { hour: "numeric", minute: "2-digit", timeZoneName: "short" })}
+          </p>
+        )}
       </div>
     );
 

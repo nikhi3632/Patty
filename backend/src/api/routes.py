@@ -3,6 +3,7 @@ import logging
 import sys
 import os
 import threading
+import time
 from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
@@ -43,6 +44,7 @@ def needs_parse(supabase_client, restaurant_id: str) -> bool:
         supabase_client.table("restaurant_commodities")
         .select("id")
         .eq("restaurant_id", restaurant_id)
+        .is_("deleted_at", "null")
         .limit(1)
         .execute()
     )
@@ -110,9 +112,16 @@ async def analyze(
             supabase.storage.from_("menus").remove([storage_path])
         except Exception:
             pass
-        supabase.storage.from_("menus").upload(
-            storage_path, content, {"content-type": f.content_type}
-        )
+        for attempt in range(3):
+            try:
+                supabase.storage.from_("menus").upload(
+                    storage_path, content, {"content-type": f.content_type}
+                )
+                break
+            except Exception:
+                if attempt == 2:
+                    raise
+                time.sleep(1)
 
         record = (
             supabase.table("menu_files")
@@ -284,6 +293,7 @@ def list_commodities(restaurant_id: str):
         supabase.table("restaurant_commodities")
         .select("*, commodities(parent, display_name, source, cadence, has_price_data)")
         .eq("restaurant_id", restaurant_id)
+        .is_("deleted_at", "null")
         .order("status")
         .order("raw_ingredient_name")
         .execute()
@@ -321,16 +331,13 @@ def commodity_registry():
 
 
 class CommodityUpdate(BaseModel):
-    user_confirmed: bool | None = None
     automation_pref: str | None = None
 
 
 @router.patch("/restaurant-commodities/{item_id}")
 def update_commodity(item_id: str, body: CommodityUpdate):
-    """Update a restaurant commodity (confirm, set automation preference)."""
+    """Update a restaurant commodity (set automation preference)."""
     updates = {}
-    if body.user_confirmed is not None:
-        updates["user_confirmed"] = body.user_confirmed
     if body.automation_pref is not None:
         if body.automation_pref not in ("full_auto", "review", "monitor"):
             raise HTTPException(
@@ -368,9 +375,18 @@ def demote_commodity(item_id: str):
 
 @router.delete("/restaurant-commodities/{item_id}")
 def remove_commodity(item_id: str):
-    """Remove a commodity from a restaurant's list (✕ on other pill)."""
+    """Soft-delete a commodity from a restaurant's list (✕ on pill)."""
     result = (
-        supabase.table("restaurant_commodities").delete().eq("id", item_id).execute()
+        supabase.table("restaurant_commodities")
+        .update(
+            {
+                "deleted_at": datetime.now(timezone.utc).isoformat(),
+                "deleted_by": "user",
+            }
+        )
+        .eq("id", item_id)
+        .is_("deleted_at", "null")
+        .execute()
     )
     if not result.data:
         raise HTTPException(404, "Item not found")
@@ -390,27 +406,6 @@ def add_commodity(restaurant_id: str, body: IngredientAdd):
 
     result = add_ingredient(supabase, restaurant_id, ingredient)
     return {"data": result}
-
-
-class BulkConfirm(BaseModel):
-    item_ids: list[str]
-
-
-@router.post("/restaurants/{restaurant_id}/commodities/confirm")
-def confirm_commodities(restaurant_id: str, body: BulkConfirm):
-    """Bulk confirm tracked commodities after user review."""
-    updated = 0
-    for item_id in body.item_ids:
-        result = (
-            supabase.table("restaurant_commodities")
-            .update({"user_confirmed": True})
-            .eq("id", item_id)
-            .eq("restaurant_id", restaurant_id)
-            .execute()
-        )
-        if result.data:
-            updated += 1
-    return {"confirmed": updated}
 
 
 # --- Trends ---
@@ -447,6 +442,7 @@ def get_calibrations(restaurant_id: str):
         .select("commodity_id, commodities(id, parent)")
         .eq("restaurant_id", restaurant_id)
         .eq("status", "tracked")
+        .is_("deleted_at", "null")
         .execute()
     )
     commodity_ids = [
@@ -668,6 +664,7 @@ def refresh_prices(restaurant_id: str):
             .select("commodities(parent)")
             .eq("restaurant_id", restaurant_id)
             .eq("status", "tracked")
+            .is_("deleted_at", "null")
             .execute()
         )
         parents = {

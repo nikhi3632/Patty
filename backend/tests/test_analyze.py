@@ -93,7 +93,7 @@ def make_needs_parse_mock(
     def table_router(name):
         t = MagicMock()
         if name == "restaurant_commodities":
-            t.select.return_value.eq.return_value.limit.return_value.execute.return_value = MagicMock(
+            t.select.return_value.eq.return_value.is_.return_value.limit.return_value.execute.return_value = MagicMock(
                 data=commodities_data
             )
         elif name == "menu_files":
