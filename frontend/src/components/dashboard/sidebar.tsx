@@ -6,6 +6,7 @@ import {
   Mail,
   UtensilsCrossed,
   Settings,
+  Plus,
 } from "lucide-react";
 
 export type View =
@@ -27,6 +28,8 @@ interface Props {
   onNavigate: (view: View) => void;
   onSystemView: () => void;
   systemView: boolean;
+  onNewRestaurant?: () => void;
+  disabledTabs?: Set<View>;
 }
 
 function NavButton({
@@ -34,19 +37,24 @@ function NavButton({
   onClick,
   icon,
   label,
+  disabled,
 }: {
   active: boolean;
   onClick: () => void;
   icon: React.ReactNode;
   label: string;
+  disabled?: boolean;
 }) {
   return (
     <button
       onClick={onClick}
+      disabled={disabled}
       className={`group relative rounded-md p-2.5 transition-colors ${
-        active
-          ? "bg-primary/10 text-primary"
-          : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
+        disabled
+          ? "text-muted-foreground/30 cursor-not-allowed"
+          : active
+            ? "bg-primary/10 text-primary"
+            : "text-muted-foreground hover:text-foreground hover:bg-muted/50"
       }`}
     >
       {icon}
@@ -57,7 +65,7 @@ function NavButton({
   );
 }
 
-export default function Sidebar({ active, onNavigate, onSystemView, systemView }: Props) {
+export default function Sidebar({ active, onNavigate, onSystemView, systemView, onNewRestaurant, disabledTabs }: Props) {
   return (
     <nav className="fixed left-0 top-0 z-20 hidden h-screen w-12 flex-col items-center gap-1 border-r bg-background pt-20 md:flex">
       {workflow.map((item) => (
@@ -67,19 +75,28 @@ export default function Sidebar({ active, onNavigate, onSystemView, systemView }
           onClick={() => onNavigate(item.id)}
           icon={item.icon}
           label={item.label}
+          disabled={disabledTabs?.has(item.id)}
         />
       ))}
 
-      {active === "trends" && (
-        <div className="mt-auto mb-6">
+      <div className="mt-auto mb-6 flex flex-col items-center gap-1">
+        {active === "trends" && (
           <NavButton
             active={systemView}
             onClick={onSystemView}
             icon={<Settings className="h-4 w-4" />}
             label="System View"
           />
-        </div>
-      )}
+        )}
+        {onNewRestaurant && (
+          <NavButton
+            active={false}
+            onClick={onNewRestaurant}
+            icon={<Plus className="h-4 w-4" />}
+            label="New Restaurant"
+          />
+        )}
+      </div>
     </nav>
   );
 }

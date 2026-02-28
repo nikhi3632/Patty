@@ -63,23 +63,30 @@ export default function TrendDetail({ trend, calibration, systemView }: Props) {
       )}
 
       {lead && (
-        <div className="flex flex-wrap items-center gap-2">
-          <Badge variant="secondary" className="text-xs">
-            {signalLabel(trend.signal)}
-          </Badge>
-          {!isStable && lead.z_score !== 0 && (
-            <span className="text-xs text-muted-foreground">
-              typical: ±{Math.abs(Math.round(lead.change_pct / lead.z_score))}%
-            </span>
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Badge variant="secondary" className="text-xs">
+              {signalLabel(trend.signal)}
+            </Badge>
+            {!isStable && lead.z_score !== 0 && (
+              <span className="text-xs text-muted-foreground">
+                typical: ±{Math.abs(Math.round(lead.change_pct / lead.z_score))}%
+              </span>
+            )}
+            {lead.date_range && (
+              <span className="text-xs text-muted-foreground">
+                {lead.source.toUpperCase()}
+                {lead.market ? ` · ${lead.market}` : ""}
+                {` · ${lead.date_range}`}
+              </span>
+            )}
+          </div>
+          {lead.source === "mars" && (
+            <p className="text-[11px] text-muted-foreground/60">
+              Wholesale terminal market prices vary by package size. Percentage reflects relative price movement.
+            </p>
           )}
-          {lead.date_range && (
-            <span className="text-xs text-muted-foreground">
-              {lead.source.toUpperCase()}
-              {lead.market ? ` · ${lead.market}` : ""}
-              {` · ${lead.date_range}`}
-            </span>
-          )}
-        </div>
+        </>
       )}
 
       {systemView && calibration && (

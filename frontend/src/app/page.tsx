@@ -54,7 +54,14 @@ export default function Home() {
         />
       )}
       {view === "dashboard" && restaurantId && (
-        <Dashboard restaurantId={restaurantId} />
+        <Dashboard
+          restaurantId={restaurantId}
+          onNewRestaurant={() => {
+            localStorage.removeItem(LS_KEY);
+            setActiveId(null);
+            setProcessing(false);
+          }}
+        />
       )}
     </main>
   );

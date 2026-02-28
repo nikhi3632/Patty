@@ -74,16 +74,25 @@ export function fmtPrice(n: number): string {
   return n < 1 ? `$${n.toFixed(2)}` : n < 10 ? `$${n.toFixed(2)}` : `$${n.toFixed(1)}`;
 }
 
-/** Price detail line: "$0.74 → $1.24/lb, +68% over 5 months" */
+/** Price detail line.
+ *  NASS: "$0.74 → $1.24/lb, +68% over 5 months" (real per-unit prices)
+ *  MARS: "Down over 5 market days" (no dollar amounts — prices are per-carton averages across mixed package sizes)
+ */
 export function priceDetail(trend: Trend): string | null {
   const s = leadSignal(trend);
   if (!s) return null;
   const sign = s.change_pct > 0 ? "+" : "";
+  const period = s.source === "mars" ? "market days" : "months";
+
+  if (s.source === "mars") {
+    const dir = s.change_pct > 0 ? "Up" : "Down";
+    return `${dir} ${sign}${s.change_pct.toFixed(0)}% over ${s.horizon} ${period}`;
+  }
+
   const conv = unitConversion(s.unit);
   const prev = s.previous_price * conv.factor;
   const curr = s.current_price * conv.factor;
   const unitStr = conv.label ? `/${conv.label}` : "";
-  const period = s.source === "mars" ? "market days" : "months";
   return `${fmtPrice(prev)} → ${fmtPrice(curr)}${unitStr}, ${sign}${s.change_pct.toFixed(0)}% over ${s.horizon} ${period}`;
 }
 

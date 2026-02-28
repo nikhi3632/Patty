@@ -59,8 +59,10 @@ export default function PriceChart({ commodityId, lead, calibration }: Props) {
 
   if (!series || series.prices.length < 3) return null;
 
-  // Convert all prices using the unit from the lead signal (e.g. CWT → lb)
-  const conv = unitConversion(lead.unit);
+  const isMars = lead.source === "mars";
+
+  // Convert NASS prices (e.g. CWT → lb). MARS prices stay raw (per-carton, no conversion).
+  const conv = isMars ? { factor: 1, label: "" } : unitConversion(lead.unit);
 
   const data: DataPoint[] = series.prices.map((price, i) => ({
     date: series.dates[i] ?? "",
@@ -77,13 +79,13 @@ export default function PriceChart({ commodityId, lead, calibration }: Props) {
   const recentStart = Math.max(0, data.length - horizon);
   const priorStart = Math.max(0, data.length - horizon * 2);
 
-  // Baseline = prior window average, converted
-  const baseline = convertPrice(lead.previous_price, lead.unit);
+  // Baseline = prior window average (NASS only — MARS dollar amounts are meaningless)
+  const baseline = isMars ? null : convertPrice(lead.previous_price, lead.unit);
 
-  // Normal range band: baseline ± 1 std
+  // Normal range band: baseline ± 1 std (NASS only)
   let bandUpper: number | undefined;
   let bandLower: number | undefined;
-  if (calibration && calibration.std_change > 0) {
+  if (!isMars && baseline != null && calibration && calibration.std_change > 0) {
     const stdPct = calibration.std_change / 100;
     bandUpper = baseline * (1 + stdPct);
     bandLower = baseline * (1 - stdPct);
@@ -128,14 +130,16 @@ export default function PriceChart({ commodityId, lead, calibration }: Props) {
               label={{ value: "normal range", position: "insideTopRight", fontSize: 10, fill: "#94a3b8" }}
             />
           )}
-          {/* Baseline */}
-          <ReferenceLine
-            y={baseline}
-            stroke="#94a3b8"
-            strokeDasharray="3 3"
-            strokeWidth={1}
-            label={{ value: `baseline ${fmtPrice(baseline)}`, position: "insideTopLeft", fontSize: 10, fill: "#94a3b8", offset: 2 }}
-          />
+          {/* Baseline (NASS only — dollar amounts are meaningful) */}
+          {baseline != null && (
+            <ReferenceLine
+              y={baseline}
+              stroke="#94a3b8"
+              strokeDasharray="3 3"
+              strokeWidth={1}
+              label={{ value: `baseline ${fmtPrice(baseline)}`, position: "insideTopLeft", fontSize: 10, fill: "#94a3b8", offset: 2 }}
+            />
+          )}
           <XAxis
             dataKey="date"
             tick={{ fontSize: 10, fill: "#94a3b8" }}
@@ -146,11 +150,11 @@ export default function PriceChart({ commodityId, lead, calibration }: Props) {
           />
           <YAxis
             domain={[minPrice - padding, maxPrice + padding]}
-            tick={{ fontSize: 10, fill: "#94a3b8" }}
+            tick={isMars ? false : { fontSize: 10, fill: "#94a3b8" }}
             tickLine={false}
             axisLine={false}
             tickFormatter={fmtPrice}
-            width={50}
+            width={isMars ? 10 : 50}
           />
           <Tooltip
             content={({ active, payload }) => {
@@ -158,8 +162,14 @@ export default function PriceChart({ commodityId, lead, calibration }: Props) {
               const d = payload[0].payload as DataPoint;
               return (
                 <div className="rounded border bg-background px-2 py-1 text-xs shadow-sm">
-                  <p className="font-medium">{fmtPrice(d.price)}{conv.label ? `/${conv.label}` : ""}</p>
-                  <p className="text-muted-foreground">{formatDate(d.date)}</p>
+                  {isMars ? (
+                    <p className="font-medium">{formatDate(d.date)}</p>
+                  ) : (
+                    <>
+                      <p className="font-medium">{fmtPrice(d.price)}{conv.label ? `/${conv.label}` : ""}</p>
+                      <p className="text-muted-foreground">{formatDate(d.date)}</p>
+                    </>
+                  )}
                 </div>
               );
             }}

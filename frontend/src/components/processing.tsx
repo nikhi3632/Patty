@@ -58,7 +58,7 @@ export default function Processing({ restaurantId, onComplete }: Props) {
             Reading your menu
           </h1>
           <p className="mt-2 text-sm text-muted-foreground">
-            This takes about 30 seconds
+            This takes a while
           </p>
         </div>
 

@@ -666,9 +666,7 @@ def refresh_prices(restaurant_id: str):
             .execute()
         )
         parents = {
-            r["commodities"]["parent"]
-            for r in tracked.data
-            if r.get("commodities")
+            r["commodities"]["parent"] for r in tracked.data if r.get("commodities")
         }
 
         if not parents:
@@ -693,7 +691,9 @@ def refresh_prices(restaurant_id: str):
                 if slug_id not in seen_slugs:
                     seen_slugs.add(slug_id)
                     is_daily = "Terminal" in params.get("market_types", [])
-                    fetch_and_store_mars(supabase, slug_id, last_reports=30 if is_daily else 12)
+                    fetch_and_store_mars(
+                        supabase, slug_id, last_reports=30 if is_daily else 12
+                    )
 
         compute_trends(supabase, restaurant_id)
         logger.info("refresh completed for %s", restaurant_id)

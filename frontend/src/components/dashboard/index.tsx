@@ -30,11 +30,12 @@ import MenuSection from "./menu-section";
 
 interface Props {
   restaurantId: string;
+  onNewRestaurant?: () => void;
 }
 
 type StepStatus = "idle" | "running" | "done" | "error";
 
-export default function Dashboard({ restaurantId }: Props) {
+export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
   const [confirmed, setConfirmed] = useState<boolean | null>(null);
   const [commodities, setCommodities] = useState<Commodity[]>([]);
   const [trends, setTrends] = useState<Trend[]>([]);
@@ -211,6 +212,15 @@ export default function Dashboard({ restaurantId }: Props) {
   const sectionLoading = (step: "trends" | "suppliers" | "emails") =>
     pipelineStatus[step] === "idle" || pipelineStatus[step] === "running";
 
+  const pipelineRunning =
+    sectionLoading("trends") && trends.length === 0;
+
+  // Disable tabs whose data isn't ready yet
+  const disabledTabs = new Set<View>();
+  if (sectionLoading("suppliers") && suppliers.length === 0) disabledTabs.add("suppliers");
+  if (sectionLoading("emails") && emails.length === 0) disabledTabs.add("outreach");
+  if (sectionLoading("trends") && trends.length === 0) disabledTabs.add("trends");
+
   return (
     <>
       <Sidebar
@@ -218,17 +228,29 @@ export default function Dashboard({ restaurantId }: Props) {
         onNavigate={setActiveView}
         onSystemView={toggleSystemView}
         systemView={systemView}
+        onNewRestaurant={onNewRestaurant}
+        disabledTabs={disabledTabs}
       />
 
       <div className="mx-auto max-w-2xl px-4 py-8 md:pl-16">
         {/* Top bar */}
-        <div className="mb-4">
-          <h1 className="text-xl font-semibold tracking-tight">Patty</h1>
-          <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
+        <div className="mb-4 flex items-start justify-between">
+          <div>
+            <h1 className="text-xl font-semibold tracking-tight">Patty</h1>
+            <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
+          </div>
+          {onNewRestaurant && (
+            <button
+              onClick={onNewRestaurant}
+              className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+            >
+              + New Restaurant
+            </button>
+          )}
         </div>
 
         {/* Summary — always visible, count only items with trend data */}
-        <Summary actionable={actionable} active={actionable.length + stable.length} />
+        <Summary actionable={actionable} active={actionable.length + stable.length} pipelineRunning={pipelineRunning} />
 
         {/* View content */}
         <div className="mt-4 rounded-lg border p-5">

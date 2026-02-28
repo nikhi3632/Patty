@@ -1,11 +1,13 @@
 "use client";
 
+import { Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { titleCase, type CommodityViewModel } from "./commodity-data";
 
 interface Props {
   actionable: CommodityViewModel[];
   active: number;
+  pipelineRunning?: boolean;
 }
 
 function nameList(vms: CommodityViewModel[]): string {
@@ -16,13 +18,14 @@ function nameList(vms: CommodityViewModel[]): string {
   return `${names.slice(0, 2).join(", ")}, and ${names.length - 2} more`;
 }
 
-export default function Summary({ actionable, active }: Props) {
-  if (active === 0) {
+export default function Summary({ actionable, active, pipelineRunning }: Props) {
+  if (active === 0 || pipelineRunning) {
     return (
       <Card className="border-l-4 border-l-muted-foreground/30">
-        <CardContent className="py-4">
-          <p className="text-sm font-medium leading-relaxed">
-            Computing price trends...
+        <CardContent className="flex items-center gap-3 py-4">
+          <Loader2 className="h-4 w-4 animate-spin text-muted-foreground shrink-0" />
+          <p className="text-sm text-muted-foreground">
+            Analyzing price trends, finding suppliers, and drafting emails...
           </p>
         </CardContent>
       </Card>
