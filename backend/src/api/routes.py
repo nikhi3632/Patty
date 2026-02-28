@@ -19,8 +19,8 @@ from src.core.pricing.trend_analyzer import (
     build_nass_series,
     build_mars_series,
 )
-from src.core.pricing.nass_client import fetch_all_nass_prices
-from src.core.pricing.mars_client import fetch_all_mars_prices
+from src.core.pricing.nass_client import fetch_and_store_nass
+from src.core.pricing.mars_client import fetch_and_store_mars
 from src.core.suppliers.finder import find_suppliers
 from src.core.email.drafter import draft_all_emails
 from src.core.email.sender import send_email
@@ -652,12 +652,49 @@ refresh_running = False
 
 
 def refresh_prices(restaurant_id: str):
-    """Background job: fetch latest NASS + MARS prices, recompute trends."""
+    """Background job: fetch latest prices for tracked commodities only, then recompute trends."""
     global refresh_running
     try:
         logger.info("refresh started for %s", restaurant_id)
-        fetch_all_nass_prices(supabase, state="US", months=12)
-        fetch_all_mars_prices(supabase)
+
+        # Get the parents this restaurant tracks
+        tracked = (
+            supabase.table("restaurant_commodities")
+            .select("commodities(parent)")
+            .eq("restaurant_id", restaurant_id)
+            .eq("status", "tracked")
+            .execute()
+        )
+        parents = {
+            r["commodities"]["parent"]
+            for r in tracked.data
+            if r.get("commodities")
+        }
+
+        if not parents:
+            logger.info("no tracked commodities for %s", restaurant_id)
+            return
+
+        # Fetch only the commodity records matching tracked parents
+        registry = (
+            supabase.table("commodities")
+            .select("source, source_params")
+            .in_("parent", list(parents))
+            .execute()
+        )
+
+        seen_slugs = set()
+        for row in registry.data:
+            params = row["source_params"]
+            if row["source"] == "NASS":
+                fetch_and_store_nass(supabase, params["commodity_desc"], "US", 12)
+            elif row["source"] == "MARS":
+                slug_id = params["slug_id"]
+                if slug_id not in seen_slugs:
+                    seen_slugs.add(slug_id)
+                    is_daily = "Terminal" in params.get("market_types", [])
+                    fetch_and_store_mars(supabase, slug_id, last_reports=30 if is_daily else 12)
+
         compute_trends(supabase, restaurant_id)
         logger.info("refresh completed for %s", restaurant_id)
     except Exception:
