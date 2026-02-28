@@ -16,31 +16,40 @@ RESTAURANT_ID = "00000000-0000-0000-0000-000000000001"
 def test_list_suppliers(mock_sb):
     rows = [
         {
-            "id": "s1",
-            "name": "ABC Foods",
-            "email": "sales@abc.com",
-            "website": "https://abc.com",
+            "distance_miles": None,
+            "suppliers": {
+                "id": "s1",
+                "name": "ABC Foods",
+                "email": "sales@abc.com",
+                "website": "https://abc.com",
+            },
         },
         {
-            "id": "s2",
-            "name": "XYZ Produce",
-            "email": None,
-            "website": "https://xyz.com",
+            "distance_miles": 5.2,
+            "suppliers": {
+                "id": "s2",
+                "name": "XYZ Produce",
+                "email": None,
+                "website": "https://xyz.com",
+            },
         },
     ]
-    mock_sb.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
+    mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
         data=rows
     )
 
     resp = client.get(f"/api/restaurants/{RESTAURANT_ID}/suppliers")
     assert resp.status_code == 200
-    assert len(resp.json()["data"]) == 2
-    assert resp.json()["data"][0]["name"] == "ABC Foods"
+    data = resp.json()["data"]
+    assert len(data) == 2
+    assert data[0]["name"] == "ABC Foods"
+    assert data[1]["name"] == "XYZ Produce"
+    assert data[1]["distance_miles"] == 5.2
 
 
 @patch("src.api.routes.supabase")
 def test_list_suppliers_empty(mock_sb):
-    mock_sb.table.return_value.select.return_value.eq.return_value.order.return_value.execute.return_value = MagicMock(
+    mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = MagicMock(
         data=[]
     )
 

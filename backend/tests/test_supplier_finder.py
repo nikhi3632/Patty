@@ -1,4 +1,5 @@
 from unittest.mock import patch, MagicMock
+from src.core.geo import haversine, geocode
 from src.core.suppliers.finder import (
     extract_domain,
     extract_emails_from_text,
@@ -9,6 +10,8 @@ from src.core.suppliers.finder import (
     search_hunter,
     filter_with_llm,
     enrich_contact,
+    batch_enrich_contacts,
+    compute_distances,
     find_suppliers,
 )
 
@@ -25,7 +28,7 @@ def test_extract_domain_no_www():
 
 
 def test_extract_domain_subdomain():
-    assert extract_domain("https://shop.example.com") == "shop.example.com"
+    assert extract_domain("https://shop.example.com") == "example.com"
 
 
 def test_extract_domain_invalid():
@@ -34,6 +37,71 @@ def test_extract_domain_invalid():
 
 def test_extract_domain_empty():
     assert extract_domain("") is None
+
+
+# --- haversine ---
+
+
+def test_haversine_same_point():
+    assert haversine(41.88, -87.63, 41.88, -87.63) == 0.0
+
+
+def test_haversine_chicago_to_nyc():
+    dist = haversine(41.88, -87.63, 40.71, -74.01)
+    assert 710 < dist < 730  # ~720 miles
+
+
+def test_haversine_short_distance():
+    # Two points ~10 miles apart in Chicago
+    dist = haversine(41.88, -87.63, 41.95, -87.63)
+    assert 4 < dist < 6
+
+
+# --- geocode ---
+
+
+@patch("src.core.geo.get")
+@patch("src.core.geo.httpx.get")
+def test_geocode_success(mock_httpx_get, mock_config_get):
+    mock_config_get.return_value = "fake-key"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {
+        "results": [{"geometry": {"location": {"lat": 41.8781, "lng": -87.6298}}}]
+    }
+    mock_httpx_get.return_value = mock_resp
+
+    result = geocode("US Foods, Chicago, IL")
+    assert result is not None
+    lat, lng = result
+    assert abs(lat - 41.8781) < 0.001
+    assert abs(lng - (-87.6298)) < 0.001
+
+
+@patch("src.core.geo.get")
+@patch("src.core.geo.httpx.get")
+def test_geocode_not_found(mock_httpx_get, mock_config_get):
+    mock_config_get.return_value = "fake-key"
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"results": []}
+    mock_httpx_get.return_value = mock_resp
+
+    assert geocode("Nonexistent Business XYZ") is None
+
+
+@patch("src.core.geo.get")
+def test_geocode_no_api_key(mock_config_get):
+    mock_config_get.return_value = ""
+    assert geocode("anything") is None
+
+
+@patch("src.core.geo.get")
+@patch("src.core.geo.httpx.get")
+def test_geocode_network_error(mock_httpx_get, mock_config_get):
+    mock_config_get.return_value = "fake-key"
+    mock_httpx_get.side_effect = Exception("timeout")
+    assert geocode("anything") is None
 
 
 # --- extract_emails_from_text ---
@@ -325,13 +393,120 @@ def test_enrich_contact_all_fail(mock_hunter, mock_extract, mock_search):
     assert result["phone"] is None
 
 
+# --- batch_enrich_contacts ---
+
+
+@patch("src.core.suppliers.finder.search_tavily")
+@patch("src.core.suppliers.finder.extract_tavily")
+@patch("src.core.suppliers.finder.search_hunter")
+def test_batch_enrich_hunter_hit_skips_extract(mock_hunter, mock_extract, mock_search):
+    """When Hunter finds email, that supplier should not generate extract URLs."""
+    mock_hunter.return_value = [
+        {
+            "value": "sales@abc.com",
+            "confidence": 95,
+            "first_name": "Jo",
+            "last_name": "X",
+            "position": "Sales",
+        }
+    ]
+
+    suppliers = [
+        {"name": "ABC Foods", "website": "https://abc.com"},
+        {"name": "DEF Foods", "website": "https://def.com"},
+    ]
+    results = batch_enrich_contacts(suppliers, "Chicago", "IL")
+
+    # First supplier found via Hunter — second falls through
+    assert results[0]["email"] == "sales@abc.com"
+    assert results[0]["contact_name"] == "Jo X"
+
+    # extract_tavily should only get URLs for DEF (not ABC)
+    if mock_extract.called:
+        urls = mock_extract.call_args[0][0]
+        assert not any("abc.com" in u for u in urls)
+
+
+@patch("src.core.suppliers.finder.search_tavily")
+@patch("src.core.suppliers.finder.extract_tavily")
+@patch("src.core.suppliers.finder.search_hunter")
+def test_batch_enrich_batches_extract(mock_hunter, mock_extract, mock_search):
+    """Multiple suppliers should produce ONE extract_tavily call with all URLs."""
+    mock_hunter.return_value = []  # Hunter misses all
+    mock_extract.return_value = [
+        {"url": "https://abc.com", "raw_content": "Email: orders@abc.com"},
+        {"url": "https://def.com/contact", "raw_content": "Call (555) 123-4567"},
+    ]
+    mock_search.return_value = []
+
+    suppliers = [
+        {"name": "ABC Foods", "website": "https://abc.com"},
+        {"name": "DEF Foods", "website": "https://def.com"},
+    ]
+    results = batch_enrich_contacts(suppliers, "Chicago", "IL")
+
+    # Should be exactly 1 extract_tavily call with URLs from both suppliers
+    assert mock_extract.call_count == 1
+    urls = mock_extract.call_args[0][0]
+    assert any("abc.com" in u for u in urls)
+    assert any("def.com" in u for u in urls)
+    # 5 URLs per supplier (base + 4 paths) × 2 suppliers = 10
+    assert len(urls) == 10
+
+    assert results[0]["email"] == "orders@abc.com"
+    assert results[1]["phone"] == "(555) 123-4567"
+
+
+# --- compute_distances ---
+
+
+@patch("src.core.suppliers.finder.geocode_full")
+def test_compute_distances_success(mock_geocode_full):
+    mock_geocode_full.side_effect = [
+        (41.90, -87.65, "123 Main St, Chicago, IL 60601"),  # ~1.5 miles from restaurant
+        None,  # geocode fails
+    ]
+
+    suppliers = [
+        {"name": "ABC Foods"},
+        {"name": "Unknown Co"},
+    ]
+    results = compute_distances(suppliers, "Chicago", "IL", 41.88, -87.63)
+
+    assert len(results) == 2
+    assert results[0]["distance"] is not None
+    assert 1.0 < results[0]["distance"] < 3.0
+    assert results[0]["address"] == "123 Main St, Chicago, IL 60601"
+    assert results[1]["distance"] is None
+    assert results[1]["address"] is None
+
+
+@patch("src.core.suppliers.finder.geocode_full")
+def test_compute_distances_uses_address_first(mock_geocode_full):
+    """Should try the supplier's address before falling back to name + city."""
+    mock_geocode_full.side_effect = [
+        (41.90, -87.65, "123 Main St, Chicago, IL"),  # address hit
+    ]
+
+    suppliers = [{"name": "ABC Foods", "address": "123 Main St, Chicago, IL"}]
+    compute_distances(suppliers, "Chicago", "IL", 41.88, -87.63)
+
+    # Should have been called with the address, not "ABC Foods, Chicago, IL"
+    mock_geocode_full.assert_called_once_with("123 Main St, Chicago, IL")
+
+
+def test_compute_distances_empty():
+    assert compute_distances([], "Chicago", "IL", 41.88, -87.63) == []
+
+
 # --- find_suppliers ---
 
 
-@patch("src.core.suppliers.finder.enrich_contact")
+@patch("src.core.suppliers.finder.compute_distances")
+@patch("src.core.suppliers.finder.batch_enrich_contacts")
 @patch("src.core.suppliers.finder.filter_with_llm")
 @patch("src.core.suppliers.finder.search_tavily")
-def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
+def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_batch, mock_dist):
     mock_tavily.return_value = [
         {
             "title": "Good Foods",
@@ -348,12 +523,17 @@ def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
             "reasoning": "Local distributor",
         }
     ]
-    mock_enrich.return_value = {
-        "email": "sales@goodfoods.com",
-        "phone": None,
-        "contact_name": "Jane Doe",
-        "contact_title": "Sales Manager",
-    }
+    mock_batch.return_value = [
+        {
+            "email": "sales@goodfoods.com",
+            "phone": None,
+            "contact_name": "Jane Doe",
+            "contact_title": "Sales Manager",
+        }
+    ]
+    mock_dist.return_value = [
+        {"distance": 3.2, "address": "123 Main St, Chicago, IL 60601"}
+    ]
 
     mock_sb = MagicMock()
 
@@ -368,12 +548,16 @@ def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
 
     mock_tracked = MagicMock()
     mock_tracked.data = [
-        {"raw_ingredient_name": "tomatoes"},
-        {"raw_ingredient_name": "cheese"},
+        {"commodities": {"parent": "tomatoes"}},
+        {"commodities": {"parent": "cheese"}},
     ]
 
     mock_delete = MagicMock()
     mock_delete.data = []
+
+    # No existing supplier by website
+    mock_existing = MagicMock()
+    mock_existing.data = []
 
     mock_insert = MagicMock()
     mock_insert.data = [
@@ -387,9 +571,11 @@ def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
             "website": "https://goodfoods.com",
             "categories": ["produce"],
             "source": "tavily",
-            "restaurant_id": "rest-1",
         }
     ]
+
+    mock_link_insert = MagicMock()
+    mock_link_insert.data = [{"id": "link-1"}]
 
     def table_router(table_name):
         mock_t = MagicMock()
@@ -397,9 +583,18 @@ def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif table_name == "restaurant_commodities":
             mock_t.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_tracked
-        elif table_name == "suppliers":
+        elif table_name == "restaurant_suppliers":
             mock_t.delete.return_value.eq.return_value.execute.return_value = (
                 mock_delete
+            )
+            mock_t.insert.return_value.execute.return_value = mock_link_insert
+        elif table_name == "suppliers":
+            # Website check (.eq) and name check (.ilike) both return no match
+            mock_t.select.return_value.eq.return_value.execute.return_value = (
+                mock_existing
+            )
+            mock_t.select.return_value.ilike.return_value.execute.return_value = (
+                mock_existing
             )
             mock_t.insert.return_value.execute.return_value = mock_insert
         return mock_t
@@ -411,13 +606,17 @@ def test_find_suppliers_full_flow(mock_tavily, mock_filter, mock_enrich):
     assert result["suppliers_found"] == 1
     assert result["suppliers"][0]["name"] == "Good Foods"
     assert result["suppliers"][0]["email"] == "sales@goodfoods.com"
-    assert result["city"] == "123 Main St"
+    assert result["city"] == "Chicago"
     assert result["state"] == "IL"
 
 
+@patch("src.core.suppliers.finder.compute_distances")
+@patch("src.core.suppliers.finder.batch_enrich_contacts")
 @patch("src.core.suppliers.finder.search_tavily")
-def test_find_suppliers_no_results(mock_tavily):
+def test_find_suppliers_no_results(mock_tavily, mock_batch, mock_dist):
     mock_tavily.return_value = []
+    mock_batch.return_value = []
+    mock_dist.return_value = []
 
     mock_sb = MagicMock()
 
@@ -442,7 +641,7 @@ def test_find_suppliers_no_results(mock_tavily):
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif table_name == "restaurant_commodities":
             mock_t.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_tracked
-        elif table_name == "suppliers":
+        elif table_name == "restaurant_suppliers":
             mock_t.delete.return_value.eq.return_value.execute.return_value = (
                 mock_delete
             )
@@ -455,11 +654,14 @@ def test_find_suppliers_no_results(mock_tavily):
     assert result["suppliers"] == []
 
 
-@patch("src.core.suppliers.finder.enrich_contact")
+@patch("src.core.suppliers.finder.compute_distances")
+@patch("src.core.suppliers.finder.batch_enrich_contacts")
 @patch("src.core.suppliers.finder.filter_with_llm")
 @patch("src.core.suppliers.finder.search_tavily")
-def test_find_suppliers_dedup_by_domain(mock_tavily, mock_filter, mock_enrich):
-    """Two suppliers with same domain should be deduped."""
+def test_find_suppliers_dedup_by_domain(
+    mock_tavily, mock_filter, mock_batch, mock_dist
+):
+    """Two suppliers with same domain should be deduped before enrichment."""
     mock_tavily.return_value = [{"title": "A", "url": "https://a.com", "content": "x"}]
     mock_filter.return_value = [
         {
@@ -475,12 +677,11 @@ def test_find_suppliers_dedup_by_domain(mock_tavily, mock_filter, mock_enrich):
             "reasoning": "ok",
         },
     ]
-    mock_enrich.return_value = {
-        "email": None,
-        "phone": None,
-        "contact_name": None,
-        "contact_title": None,
-    }
+    # Only 1 supplier after dedup, so batch returns 1 result
+    mock_batch.return_value = [
+        {"email": None, "phone": None, "contact_name": None, "contact_title": None}
+    ]
+    mock_dist.return_value = [{"distance": None, "address": None}]
 
     mock_sb = MagicMock()
 
@@ -494,15 +695,21 @@ def test_find_suppliers_dedup_by_domain(mock_tavily, mock_filter, mock_enrich):
     }
 
     mock_tracked = MagicMock()
-    mock_tracked.data = [{"raw_ingredient_name": "produce"}]
+    mock_tracked.data = [{"commodities": {"parent": "produce"}}]
 
     mock_delete = MagicMock()
     mock_delete.data = []
+
+    mock_existing = MagicMock()
+    mock_existing.data = []
 
     mock_insert = MagicMock()
     mock_insert.data = [
         {"id": "s1", "name": "ABC Foods", "website": "https://www.abcfoods.com"}
     ]
+
+    mock_link_insert = MagicMock()
+    mock_link_insert.data = [{"id": "link-1"}]
 
     def table_router(table_name):
         mock_t = MagicMock()
@@ -510,9 +717,17 @@ def test_find_suppliers_dedup_by_domain(mock_tavily, mock_filter, mock_enrich):
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif table_name == "restaurant_commodities":
             mock_t.select.return_value.eq.return_value.eq.return_value.execute.return_value = mock_tracked
-        elif table_name == "suppliers":
+        elif table_name == "restaurant_suppliers":
             mock_t.delete.return_value.eq.return_value.execute.return_value = (
                 mock_delete
+            )
+            mock_t.insert.return_value.execute.return_value = mock_link_insert
+        elif table_name == "suppliers":
+            mock_t.select.return_value.eq.return_value.execute.return_value = (
+                mock_existing
+            )
+            mock_t.select.return_value.ilike.return_value.execute.return_value = (
+                mock_existing
             )
             mock_t.insert.return_value.execute.return_value = mock_insert
         return mock_t
@@ -523,3 +738,5 @@ def test_find_suppliers_dedup_by_domain(mock_tavily, mock_filter, mock_enrich):
 
     # Should only insert 1 supplier, not 2 (dedup by domain)
     assert result["suppliers_found"] == 1
+    # batch_enrich_contacts should receive only 1 supplier (post-dedup)
+    assert len(mock_batch.call_args[0][0]) == 1

@@ -105,23 +105,65 @@ def test_match_ingredient_llm_returns_nonexistent_parent():
 # --- Unit tests for add_ingredient ---
 
 
-def test_add_ingredient_matched():
+def make_add_client(
+    commodity_data=None, rc_data=None, insert_data=None, update_data=None
+):
+    """Build a mock supabase client with table routing for add_ingredient tests."""
     mock_client = MagicMock()
 
-    # match_ingredient returns a match
+    commodities_table = MagicMock()
+    rc_table = MagicMock()
+
+    def table_router(name):
+        if name == "commodities":
+            return commodities_table
+        if name == "restaurant_commodities":
+            return rc_table
+        return MagicMock()
+
+    mock_client.table.side_effect = table_router
+
+    # commodities.select("has_price_data").eq("id", ...).single().execute()
+    if commodity_data is not None:
+        commodities_table.select.return_value.eq.return_value.single.return_value.execute.return_value = MagicMock(
+            data=commodity_data
+        )
+
+    # restaurant_commodities.select("id, status").eq("restaurant_id", ...).eq("commodity_id", ...).execute()
+    if rc_data is not None:
+        rc_table.select.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=rc_data
+        )
+
+    # For "other" path: .select().eq().eq().eq().execute()
+    rc_table.select.return_value.eq.return_value.eq.return_value.eq.return_value.execute.return_value = MagicMock(
+        data=rc_data or []
+    )
+
+    if insert_data is not None:
+        rc_table.insert.return_value.execute.return_value = MagicMock(data=insert_data)
+
+    if update_data is not None:
+        rc_table.update.return_value.eq.return_value.execute.return_value = MagicMock(
+            data=update_data
+        )
+
+    return mock_client
+
+
+def test_add_ingredient_matched_with_price_data():
+    mock_client = make_add_client(
+        commodity_data={"has_price_data": True},
+        rc_data=[],
+        insert_data=[{"id": "new-row", "status": "tracked"}],
+    )
+
     match_result = {
         "matched_parent": "cheese",
         "commodity_id": "aaa",
         "confidence": "high",
         "reasoning": "Mozzarella is cheese",
     }
-
-    # No existing tracked item
-    mock_client.table().select().eq().eq().execute.return_value = MagicMock(data=[])
-    # Insert returns a row
-    mock_client.table().insert().execute.return_value = MagicMock(
-        data=[{"id": "new-row", "status": "tracked"}]
-    )
 
     with patch("src.core.menu.matcher.match_ingredient", return_value=match_result):
         result = add_ingredient(mock_client, "rest-1", "mozzarella")
@@ -130,8 +172,31 @@ def test_add_ingredient_matched():
     assert result["match"]["matched_parent"] == "cheese"
 
 
+def test_add_ingredient_matched_without_price_data():
+    mock_client = make_add_client(
+        commodity_data={"has_price_data": False},
+        rc_data=[],
+        insert_data=[{"id": "new-row", "status": "other"}],
+    )
+
+    match_result = {
+        "matched_parent": "chicken",
+        "commodity_id": "bbb",
+        "confidence": "high",
+        "reasoning": "Match",
+    }
+
+    with patch("src.core.menu.matcher.match_ingredient", return_value=match_result):
+        result = add_ingredient(mock_client, "rest-1", "chicken breast")
+
+    assert result["status"] == "other"
+
+
 def test_add_ingredient_no_match_goes_to_other():
-    mock_client = MagicMock()
+    mock_client = make_add_client(
+        rc_data=[],
+        insert_data=[{"id": "new-row", "status": "other"}],
+    )
 
     match_result = {
         "matched_parent": None,
@@ -140,13 +205,6 @@ def test_add_ingredient_no_match_goes_to_other():
         "reasoning": "No match",
     }
 
-    mock_client.table().select().eq().eq().eq().execute.return_value = MagicMock(
-        data=[]
-    )
-    mock_client.table().insert().execute.return_value = MagicMock(
-        data=[{"id": "new-row", "status": "other"}]
-    )
-
     with patch("src.core.menu.matcher.match_ingredient", return_value=match_result):
         result = add_ingredient(mock_client, "rest-1", "sriracha")
 
@@ -154,7 +212,10 @@ def test_add_ingredient_no_match_goes_to_other():
 
 
 def test_add_ingredient_already_tracked():
-    mock_client = MagicMock()
+    mock_client = make_add_client(
+        commodity_data={"has_price_data": True},
+        rc_data=[{"id": "existing", "status": "tracked"}],
+    )
 
     match_result = {
         "matched_parent": "cheese",
@@ -163,12 +224,28 @@ def test_add_ingredient_already_tracked():
         "reasoning": "Match",
     }
 
-    # Already exists
-    mock_client.table().select().eq().eq().execute.return_value = MagicMock(
-        data=[{"id": "existing"}]
-    )
-
     with patch("src.core.menu.matcher.match_ingredient", return_value=match_result):
         result = add_ingredient(mock_client, "rest-1", "parmesan")
 
     assert result["status"] == "already_tracked"
+
+
+def test_add_ingredient_promotes_from_other_to_tracked():
+    mock_client = make_add_client(
+        commodity_data={"has_price_data": True},
+        rc_data=[{"id": "existing", "status": "other"}],
+        update_data=[{"id": "existing", "status": "tracked"}],
+    )
+
+    match_result = {
+        "matched_parent": "arugula",
+        "commodity_id": "ccc",
+        "confidence": "high",
+        "reasoning": "Match",
+    }
+
+    with patch("src.core.menu.matcher.match_ingredient", return_value=match_result):
+        result = add_ingredient(mock_client, "rest-1", "baby arugula")
+
+    assert result["status"] == "tracked"
+    assert result["promoted"] is True

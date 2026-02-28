@@ -1,19 +1,77 @@
+import json
+import logging
 import sys
 import os
+import threading
+from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.db.client import supabase
 from src.core.pricing.market_selector import find_nearest_market
+from src.core.menu.parser import parse_menu
 from src.core.menu.matcher import add_ingredient
-from src.core.pricing.trend_analyzer import compute_trends
+from src.core.pricing.trend_analyzer import (
+    compute_trends,
+    build_nass_series,
+    build_mars_series,
+)
+from src.core.pricing.nass_client import fetch_all_nass_prices
+from src.core.pricing.mars_client import fetch_all_mars_prices
 from src.core.suppliers.finder import find_suppliers
 from src.core.email.drafter import draft_all_emails
 from src.core.email.sender import send_email
 
+logger = logging.getLogger(__name__)
+
+REFRESH_COOLDOWN = timedelta(hours=1)
+
 router = APIRouter(prefix="/api")
+
+
+def needs_parse(supabase_client, restaurant_id: str) -> bool:
+    """Check whether menu parsing is needed for a restaurant.
+
+    Returns True when:
+    - No commodities exist (new restaurant / first upload)
+    - Menu files were uploaded after the latest parse (re-upload)
+    """
+    commodities = (
+        supabase_client.table("restaurant_commodities")
+        .select("id")
+        .eq("restaurant_id", restaurant_id)
+        .limit(1)
+        .execute()
+    )
+    if not commodities.data:
+        return True
+
+    latest_upload = (
+        supabase_client.table("menu_files")
+        .select("uploaded_at")
+        .eq("restaurant_id", restaurant_id)
+        .order("uploaded_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not latest_upload.data:
+        return False
+
+    latest_parse = (
+        supabase_client.table("menu_parses")
+        .select("parsed_at")
+        .eq("restaurant_id", restaurant_id)
+        .order("parsed_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    if not latest_parse.data:
+        return True
+
+    return latest_upload.data[0]["uploaded_at"] > latest_parse.data[0]["parsed_at"]
 
 
 @router.post("/analyze")
@@ -77,6 +135,145 @@ async def analyze(
     }
 
 
+def sse_event(step: str, status: str, result: dict | None = None) -> str:
+    """Format a server-sent event."""
+    payload = {"step": step, "status": status}
+    if result is not None:
+        payload["result"] = result
+    return f"data: {json.dumps(payload)}\n\n"
+
+
+def parse_stream(restaurant_id: str):
+    """Stream 1: Parse menu only. Runs during upload, before confirmation."""
+    yield sse_event("menu_parse", "running")
+    try:
+        parse_result = None
+        if needs_parse(supabase, restaurant_id):
+            parse_result = parse_menu(supabase, restaurant_id)
+        yield sse_event(
+            "menu_parse",
+            "done",
+            {
+                "tracked": parse_result["tracked"] if parse_result else 0,
+                "other": parse_result["other"] if parse_result else 0,
+                "skipped": parse_result is None,
+            },
+        )
+    except Exception as exc:
+        logger.exception("menu_parse failed for %s", restaurant_id)
+        yield sse_event("menu_parse", "error", {"message": str(exc)})
+
+    yield sse_event("complete", "done")
+
+
+def post_confirm_stream(restaurant_id: str):
+    """Stream 2: Trends → suppliers → emails. Runs after confirmation."""
+    yield sse_event("trends", "running")
+    try:
+        trend_result = compute_trends(supabase, restaurant_id)
+        yield sse_event("trends", "done", {"computed": trend_result.get("computed", 0)})
+    except Exception as exc:
+        logger.exception("trends failed for %s", restaurant_id)
+        yield sse_event("trends", "error", {"message": str(exc)})
+
+    yield sse_event("suppliers", "running")
+    try:
+        supplier_result = find_suppliers(supabase, restaurant_id)
+        yield sse_event(
+            "suppliers",
+            "done",
+            {"suppliers_found": supplier_result.get("suppliers_found", 0)},
+        )
+    except Exception as exc:
+        logger.exception("suppliers failed for %s", restaurant_id)
+        yield sse_event("suppliers", "error", {"message": str(exc)})
+
+    yield sse_event("emails", "running")
+    try:
+        email_result = draft_all_emails(supabase, restaurant_id)
+        yield sse_event("emails", "done", {"drafted": email_result.get("drafted", 0)})
+    except Exception as exc:
+        logger.exception("emails failed for %s", restaurant_id)
+        yield sse_event("emails", "error", {"message": str(exc)})
+
+    yield sse_event("complete", "done")
+
+
+@router.get("/analyze/{restaurant_id}/stream")
+def analyze_stream(restaurant_id: str):
+    """SSE stream 1: parse menu only."""
+    return StreamingResponse(
+        parse_stream(restaurant_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.get("/analyze/{restaurant_id}/pipeline")
+def pipeline_endpoint(restaurant_id: str):
+    """SSE stream 2: trends → suppliers → emails (post-confirmation)."""
+    return StreamingResponse(
+        post_confirm_stream(restaurant_id),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+# --- Menu Files ---
+
+
+@router.get("/restaurants/{restaurant_id}/menu-files")
+def list_menu_files(restaurant_id: str):
+    """List uploaded menu files with signed URLs for display."""
+    rows = (
+        supabase.table("menu_files")
+        .select("id, file_name, file_type, storage_path, uploaded_at")
+        .eq("restaurant_id", restaurant_id)
+        .order("uploaded_at", desc=True)
+        .execute()
+    )
+    for row in rows.data:
+        signed = supabase.storage.from_("menus").create_signed_url(
+            row["storage_path"], 3600
+        )
+        row["url"] = signed.get("signedURL", "")
+    return {"data": rows.data}
+
+
+# --- Restaurant ---
+
+
+@router.get("/restaurants/{restaurant_id}")
+def get_restaurant(restaurant_id: str):
+    """Get restaurant details including confirmation status."""
+    result = (
+        supabase.table("restaurants")
+        .select("id, name, address, confirmed_at")
+        .eq("id", restaurant_id)
+        .single()
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Restaurant not found")
+    return {"data": result.data}
+
+
+@router.patch("/restaurants/{restaurant_id}")
+def confirm_restaurant(restaurant_id: str):
+    """Set confirmed_at timestamp to mark ingredient review as complete."""
+    from datetime import datetime, timezone
+
+    result = (
+        supabase.table("restaurants")
+        .update({"confirmed_at": datetime.now(timezone.utc).isoformat()})
+        .eq("id", restaurant_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Restaurant not found")
+    return {"data": result.data[0]}
+
+
 # --- Restaurant Commodities ---
 
 
@@ -85,13 +282,42 @@ def list_commodities(restaurant_id: str):
     """List tracked + other commodities for a restaurant, joined with commodity details."""
     rows = (
         supabase.table("restaurant_commodities")
-        .select("*, commodities(parent, display_name, source, cadence)")
+        .select("*, commodities(parent, display_name, source, cadence, has_price_data)")
         .eq("restaurant_id", restaurant_id)
         .order("status")
         .order("raw_ingredient_name")
         .execute()
     )
     return {"data": rows.data}
+
+
+@router.get("/commodities/registry")
+def commodity_registry():
+    """List unique parent commodities with price data availability.
+
+    Used by the add-ingredient combobox to show what's trackable.
+    """
+    rows = (
+        supabase.table("commodities")
+        .select("parent, has_price_data")
+        .eq("active", True)
+        .order("parent")
+        .execute()
+    )
+    # Deduplicate parents — a parent is trackable if ANY of its entries has data
+    registry = {}
+    for row in rows.data:
+        parent = row["parent"]
+        if parent not in registry:
+            registry[parent] = row["has_price_data"]
+        elif row["has_price_data"]:
+            registry[parent] = True
+
+    return {
+        "data": [
+            {"parent": k, "has_price_data": v} for k, v in sorted(registry.items())
+        ]
+    }
 
 
 class CommodityUpdate(BaseModel):
@@ -126,9 +352,23 @@ def update_commodity(item_id: str, body: CommodityUpdate):
     return {"data": result.data[0]}
 
 
+@router.post("/restaurant-commodities/{item_id}/demote")
+def demote_commodity(item_id: str):
+    """Move a commodity from tracked to other (✕ on tracked pill)."""
+    result = (
+        supabase.table("restaurant_commodities")
+        .update({"status": "other"})
+        .eq("id", item_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Item not found")
+    return {"data": result.data[0]}
+
+
 @router.delete("/restaurant-commodities/{item_id}")
 def remove_commodity(item_id: str):
-    """Remove a commodity from a restaurant's list."""
+    """Remove a commodity from a restaurant's list (✕ on other pill)."""
     result = (
         supabase.table("restaurant_commodities").delete().eq("id", item_id).execute()
     )
@@ -181,7 +421,7 @@ def get_trends(restaurant_id: str):
     """Get stored trends for a restaurant, sorted by signal strength."""
     rows = (
         supabase.table("trends")
-        .select("*")
+        .select("*, trend_signals(*)")
         .eq("restaurant_id", restaurant_id)
         .order("signal")
         .execute()
@@ -196,6 +436,77 @@ def recompute_trends(restaurant_id: str):
     return {"data": result}
 
 
+@router.get("/restaurants/{restaurant_id}/calibrations")
+def get_calibrations(restaurant_id: str):
+    """Get calibration data for all tracked commodities (System View).
+
+    Shows the system's reasoning: volatility, chosen horizon, normal range.
+    """
+    tracked = (
+        supabase.table("restaurant_commodities")
+        .select("commodity_id, commodities(id, parent)")
+        .eq("restaurant_id", restaurant_id)
+        .eq("status", "tracked")
+        .execute()
+    )
+    commodity_ids = [
+        item["commodities"]["id"] for item in tracked.data if item.get("commodities")
+    ]
+    if not commodity_ids:
+        return {"data": []}
+
+    rows = (
+        supabase.table("commodity_calibrations")
+        .select("*")
+        .in_("commodity_id", commodity_ids)
+        .order("calibrated_at", desc=True)
+        .execute()
+    )
+    return {"data": rows.data}
+
+
+@router.get("/commodities/{commodity_id}/prices")
+def get_price_series(
+    commodity_id: str, source: str = "nass", market: str | None = None
+):
+    """Return the full price history for a commodity.
+
+    Used by the frontend to render sparkline charts in trend cards.
+    """
+    row = (
+        supabase.table("commodities")
+        .select("parent")
+        .eq("id", commodity_id)
+        .single()
+        .execute()
+    )
+    if not row.data:
+        raise HTTPException(status_code=404, detail="Commodity not found")
+    parent = row.data["parent"]
+
+    if source == "mars" and market:
+        prices, dates = build_mars_series(supabase, parent, market)
+        return {
+            "data": {
+                "source": "mars",
+                "parent": parent,
+                "prices": prices,
+                "dates": dates,
+            }
+        }
+
+    prices, unit, dates = build_nass_series(supabase, parent)
+    return {
+        "data": {
+            "source": "nass",
+            "parent": parent,
+            "unit": unit,
+            "prices": prices,
+            "dates": dates,
+        }
+    }
+
+
 # --- Suppliers ---
 
 
@@ -203,13 +514,18 @@ def recompute_trends(restaurant_id: str):
 def list_suppliers(restaurant_id: str):
     """List discovered suppliers for a restaurant."""
     rows = (
-        supabase.table("suppliers")
-        .select("*")
+        supabase.table("restaurant_suppliers")
+        .select("distance_miles, suppliers(*)")
         .eq("restaurant_id", restaurant_id)
-        .order("name")
         .execute()
     )
-    return {"data": rows.data}
+    data = []
+    for row in rows.data:
+        supplier = row.get("suppliers", {})
+        supplier["distance_miles"] = row.get("distance_miles")
+        data.append(supplier)
+    data.sort(key=lambda s: s.get("name", ""))
+    return {"data": data}
 
 
 @router.post("/restaurants/{restaurant_id}/suppliers/refresh")
@@ -233,6 +549,19 @@ def list_emails(restaurant_id: str, status: str | None = None):
     if status:
         query = query.eq("status", status)
     rows = query.order("generated_at", desc=True).execute()
+
+    # Enrich with supplier distance
+    distances = (
+        supabase.table("restaurant_suppliers")
+        .select("supplier_id, distance_miles")
+        .eq("restaurant_id", restaurant_id)
+        .execute()
+    )
+    dist_map = {r["supplier_id"]: r["distance_miles"] for r in distances.data}
+    for row in rows.data:
+        if row.get("suppliers"):
+            row["suppliers"]["distance_miles"] = dist_map.get(row["supplier_id"])
+
     return {"data": rows.data}
 
 
@@ -311,3 +640,84 @@ def generate_emails(restaurant_id: str):
     """Generate outreach emails for all suppliers with email addresses."""
     result = draft_all_emails(supabase, restaurant_id)
     return {"data": result}
+
+
+# --- Restaurant Management ---
+
+
+# --- Price Refresh ---
+
+
+def refresh_prices(restaurant_id: str):
+    """Background job: fetch latest NASS + MARS prices, recompute trends."""
+    try:
+        logger.info("refresh started for %s", restaurant_id)
+        fetch_all_nass_prices(supabase, state="US", months=12)
+        fetch_all_mars_prices(supabase)
+        compute_trends(supabase, restaurant_id)
+        now = datetime.now(timezone.utc).isoformat()
+        supabase.table("commodities").update({"last_refreshed": now}).gt(
+            "id", "00000000-0000-0000-0000-000000000000"
+        ).execute()
+        logger.info("refresh completed for %s", restaurant_id)
+    except Exception:
+        logger.exception("refresh failed for %s", restaurant_id)
+
+
+@router.post("/restaurants/{restaurant_id}/refresh")
+def refresh_endpoint(restaurant_id: str):
+    """Trigger a background price data refresh.
+
+    Throttled to once per hour based on last_refreshed on any commodity.
+    Returns immediately — the fetch runs in a background thread.
+    """
+    latest = (
+        supabase.table("commodities")
+        .select("last_refreshed")
+        .not_.is_("last_refreshed", "null")
+        .order("last_refreshed", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if latest.data:
+        last = datetime.fromisoformat(latest.data[0]["last_refreshed"])
+        if datetime.now(timezone.utc) - last < REFRESH_COOLDOWN:
+            return {"status": "skipped", "reason": "refreshed recently"}
+
+    thread = threading.Thread(target=refresh_prices, args=(restaurant_id,), daemon=True)
+    thread.start()
+    return {"status": "refreshing"}
+
+
+@router.delete("/restaurants/{restaurant_id}")
+def delete_restaurant(restaurant_id: str):
+    """Delete a restaurant and all related data.
+
+    All child tables cascade on delete, so only the restaurant row
+    and storage blobs need explicit handling.
+    """
+    restaurant = (
+        supabase.table("restaurants")
+        .select("id, name")
+        .eq("id", restaurant_id)
+        .execute()
+    )
+    if not restaurant.data:
+        raise HTTPException(404, "Restaurant not found")
+
+    # Clean up storage blobs (not covered by DB cascades)
+    menu_files = (
+        supabase.table("menu_files")
+        .select("storage_path")
+        .eq("restaurant_id", restaurant_id)
+        .execute()
+    )
+    storage_paths = [f["storage_path"] for f in menu_files.data]
+    if storage_paths:
+        supabase.storage.from_("menus").remove(storage_paths)
+
+    # Cascade handles all child tables
+    supabase.table("restaurants").delete().eq("id", restaurant_id).execute()
+
+    return {"deleted": True, "name": restaurant.data[0]["name"]}

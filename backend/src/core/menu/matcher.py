@@ -113,24 +113,55 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
     """Add a user-provided ingredient to a restaurant's commodity list.
 
     Runs the matcher to try to find a registry match.
-    Match → tracked. No match → other.
-    Returns the created restaurant_commodities row + match info.
+    Match + has_price_data → tracked. Match + no data → other (with commodity_id).
+    No match → other (no commodity_id).
+
+    If the ingredient already exists in "other" with a commodity match,
+    promotes it to "tracked" (if has_price_data).
+
+    Returns the created/updated restaurant_commodities row + match info.
     """
     match = match_ingredient(supabase_client, ingredient)
 
     if match["commodity_id"]:
-        # Check if already tracked
+        # Check price data availability
+        commodity = (
+            supabase_client.table("commodities")
+            .select("has_price_data")
+            .eq("id", match["commodity_id"])
+            .single()
+            .execute()
+        )
+        has_data = commodity.data["has_price_data"] if commodity.data else False
+        status = "tracked" if has_data else "other"
+
+        # Check if already exists for this commodity
         existing = (
             supabase_client.table("restaurant_commodities")
-            .select("id")
+            .select("id, status")
             .eq("restaurant_id", restaurant_id)
             .eq("commodity_id", match["commodity_id"])
             .execute()
         )
         if existing.data:
+            old_status = existing.data[0]["status"]
+            if old_status == status:
+                return {
+                    "status": f"already_{status}",
+                    "match": match,
+                }
+            # Promote from other to tracked (or vice versa)
+            row = (
+                supabase_client.table("restaurant_commodities")
+                .update({"status": status})
+                .eq("id", existing.data[0]["id"])
+                .execute()
+            )
             return {
-                "status": "already_tracked",
+                "status": status,
                 "match": match,
+                "row": row.data[0],
+                "promoted": True,
             }
 
         row = (
@@ -140,9 +171,8 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
                     "restaurant_id": restaurant_id,
                     "commodity_id": match["commodity_id"],
                     "raw_ingredient_name": match["matched_parent"],
-                    "status": "tracked",
+                    "status": status,
                     "added_by": "user",
-                    "user_confirmed": True,
                 }
             )
             .execute()
@@ -172,14 +202,13 @@ def add_ingredient(supabase_client, restaurant_id: str, ingredient: str) -> dict
                     "raw_ingredient_name": name,
                     "status": "other",
                     "added_by": "user",
-                    "user_confirmed": True,
                 }
             )
             .execute()
         )
 
     return {
-        "status": "tracked" if match["commodity_id"] else "other",
+        "status": status if match["commodity_id"] else "other",
         "match": match,
         "row": row.data[0],
     }

@@ -1,4 +1,4 @@
-.PHONY: install dev-backend dev-frontend dev build clean db-migrate db-reset db-seed db-refresh lint fmt test test-integration
+.PHONY: install dev-backend dev-frontend dev build clean db-migrate db-reset db-seed lint lint-frontend fmt test test-integration typecheck check
 
 # Install all dependencies
 install:
@@ -31,23 +31,33 @@ db-migrate:
 		psql "$$DATABASE_URL" -f "$$f"; \
 	done
 
-# Drop and recreate all tables
+# Drop ALL tables and recreate schema
 db-reset:
 	@export $$(grep '^DATABASE_URL=' backend/.env | xargs) && \
-	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS emails, suppliers, trends, menu_parses, restaurant_commodities, wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
+	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS emails, restaurant_suppliers, suppliers, trend_signals, commodity_calibrations, trends, menu_parses, restaurant_commodities, wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
 	$(MAKE) db-migrate
 
-# Seed with test data (inserts restaurants + uploads menu files to storage)
+# Seed static reference data (commodity registry + prices — slow, run once)
 db-seed:
 	cd backend && .venv/bin/python seeds/seed.py
 
-# Seed + refresh commodity registry + fetch all prices (slow, run when needed)
-db-refresh:
-	cd backend && .venv/bin/python seeds/seed.py --refresh
-
-# Lint backend
+# Lint backend + frontend
 lint:
 	cd backend && .venv/bin/ruff check .
+	cd frontend && npm run lint
+
+# Lint frontend only
+lint-frontend:
+	cd frontend && npm run lint
+
+# Typecheck frontend
+typecheck:
+	cd frontend && npx tsc --noEmit
+
+# Full check: lint + typecheck (run before committing)
+check:
+	$(MAKE) lint
+	$(MAKE) typecheck
 
 # Format backend
 fmt:

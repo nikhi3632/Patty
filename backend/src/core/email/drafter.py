@@ -32,7 +32,7 @@ The restaurant wants to negotiate better pricing or establish a new supplier rel
 
 1. Be professional but warm — this is a business introduction, not a cold sales pitch
 2. Mention the restaurant by name and what they serve
-3. Reference specific price trends (cite numbers) to show the restaurant is data-informed
+3. If price drops are provided, you MUST cite the exact percentages from the data — these are negotiation leverage. Never mention rising prices.
 4. Name the commodities/categories they're looking to source
 5. Ask about pricing, availability, and minimum order quantities
 6. Keep it concise — 150-250 words max
@@ -41,32 +41,59 @@ The restaurant wants to negotiate better pricing or establish a new supplier rel
 
 
 def build_trend_summary(trends: list[dict]) -> str:
-    """Build a human-readable summary of price trends for the email."""
+    """Build a human-readable summary of downward price trends for the email.
+
+    Only cites falling prices — used as negotiation leverage.
+    Upward trends are omitted to avoid giving suppliers pricing power.
+
+    Expects normalized trends with nested trend_signals list per trend.
+    """
     if not trends:
         return "We're actively monitoring commodity prices and looking to optimize our supply chain."
 
     lines = []
     for t in trends:
         parent = t.get("parent", "")
+        signal = t.get("signal", "stable")
 
-        mars_pct = t.get("mars_change_pct")
-        nass_pct = t.get("nass_change_pct")
+        if signal == "stable":
+            continue
 
-        if mars_pct is not None:
-            direction = "up" if float(mars_pct) > 0 else "down"
-            lines.append(
-                f"{parent}: wholesale prices {direction} {abs(float(mars_pct)):.1f}%"
-            )
-        elif nass_pct is not None:
-            direction = "up" if float(nass_pct) > 0 else "down"
-            lines.append(
-                f"{parent}: commodity prices {direction} {abs(float(nass_pct)):.1f}%"
-            )
+        signals = t.get("trend_signals", [])
+
+        # Pick the most significant data source (prefer MARS wholesale)
+        pct = None
+        label = "prices"
+        z = None
+        for s in signals:
+            src = s.get("source")
+            p = s.get("change_pct")
+            if p is None:
+                continue
+            p = float(p)
+            if src == "mars":
+                pct = p
+                label = "wholesale prices"
+                z = s.get("z_score")
+                break
+            elif pct is None:
+                pct = p
+                label = "commodity prices"
+                z = s.get("z_score")
+
+        if pct is None or pct >= 0:
+            continue
+
+        emphasis = ""
+        if z is not None and abs(float(z)) >= 2.0:
+            emphasis = " (a significant move)"
+
+        lines.append(f"{parent}: {label} down {abs(pct):.1f}%{emphasis}")
 
     if not lines:
         return "We're actively monitoring commodity prices and looking to optimize our supply chain."
 
-    return "Recent price trends we're tracking:\n" + "\n".join(
+    return "Recent price drops we're seeing:\n" + "\n".join(
         f"- {line}" for line in lines[:5]
     )
 
@@ -105,7 +132,7 @@ def draft_email(
     # Get trends for this restaurant
     trends = (
         supabase_client.table("trends")
-        .select("parent, signal, mars_change_pct, nass_change_pct")
+        .select("parent, signal, trend_signals(source, change_pct, z_score)")
         .eq("restaurant_id", restaurant_id)
         .execute()
     )
@@ -182,13 +209,14 @@ Write a professional email introducing the restaurant and inquiring about pricin
 
 def draft_all_emails(supabase_client, restaurant_id: str) -> dict:
     """Draft outreach emails for all suppliers with email addresses."""
-    suppliers = (
-        supabase_client.table("suppliers")
-        .select("id, name, email")
+    links = (
+        supabase_client.table("restaurant_suppliers")
+        .select("suppliers(id, name, email)")
         .eq("restaurant_id", restaurant_id)
-        .order("name")
         .execute()
     )
+    suppliers_data = [row["suppliers"] for row in links.data]
+    suppliers_data.sort(key=lambda s: s.get("name", ""))
 
     # Clear old generated emails (not sent ones)
     supabase_client.table("emails").delete().eq("restaurant_id", restaurant_id).in_(
@@ -197,7 +225,7 @@ def draft_all_emails(supabase_client, restaurant_id: str) -> dict:
 
     drafted = []
     skipped = []
-    for s in suppliers.data:
+    for s in suppliers_data:
         if not s.get("email"):
             skipped.append(s["name"])
             continue

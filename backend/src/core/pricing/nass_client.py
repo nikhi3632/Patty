@@ -36,6 +36,14 @@ def fetch_nass_prices(
     data = []
     for attempt in range(5):
         resp = httpx.get(f"{base}/api_GET/", params=params, timeout=30)
+        if resp.status_code == 400:
+            # NASS returns 400 when no data matches the query — not an error
+            return []
+        if resp.status_code != 200:
+            if attempt == 4:
+                resp.raise_for_status()
+            time.sleep(5 * (2**attempt))
+            continue
         try:
             body = resp.json()
             data = body.get("data", [])
@@ -54,7 +62,10 @@ def fetch_nass_prices(
         if not unit.startswith("$"):
             continue
 
-        price = float(value.replace(",", ""))
+        try:
+            price = float(value.replace(",", ""))
+        except ValueError:
+            continue
         year = int(row["year"])
         month = int(row["begin_code"])
 

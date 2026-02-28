@@ -30,8 +30,24 @@ def create_session_http1(self, base_url, headers, timeout, verify=True, proxy=No
 
 SyncStorageClient._create_session = create_session_http1
 
-supabase = create_client(
-    get("SUPABASE_URL"),
-    get("SUPABASE_SERVICE_ROLE_KEY"),
-    options=SyncClientOptions(storage_client_timeout=120),
-)
+
+class LazySupabase:
+    """Proxy that defers Supabase client creation until first use.
+
+    Avoids connection attempts at import time, which makes tests and
+    startup more robust when .env isn't available.
+    """
+
+    instance = None
+
+    def __getattr__(self, name):
+        if LazySupabase.instance is None:
+            LazySupabase.instance = create_client(
+                get("SUPABASE_URL"),
+                get("SUPABASE_SERVICE_ROLE_KEY"),
+                options=SyncClientOptions(storage_client_timeout=120),
+            )
+        return getattr(LazySupabase.instance, name)
+
+
+supabase = LazySupabase()

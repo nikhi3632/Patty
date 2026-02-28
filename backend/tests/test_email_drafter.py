@@ -5,24 +5,28 @@ from src.core.email.drafter import build_trend_summary, draft_email, draft_all_e
 # --- build_trend_summary ---
 
 
-def test_trend_summary_with_mars_data():
+def test_trend_summary_only_downward():
     trends = [
         {
             "parent": "tomatoes",
             "signal": "strong_down",
-            "mars_change_pct": "-12.5",
-            "nass_change_pct": None,
+            "trend_signals": [
+                {"source": "mars", "change_pct": "-12.5", "z_score": "-2.5"},
+            ],
         },
         {
             "parent": "cheese",
             "signal": "moderate_up",
-            "mars_change_pct": "8.3",
-            "nass_change_pct": "5.1",
+            "trend_signals": [
+                {"source": "mars", "change_pct": "8.3", "z_score": "1.6"},
+                {"source": "nass", "change_pct": "5.1", "z_score": "1.2"},
+            ],
         },
     ]
     result = build_trend_summary(trends)
     assert "tomatoes: wholesale prices down 12.5%" in result
-    assert "cheese: wholesale prices up 8.3%" in result
+    assert "significant move" in result  # z >= 2.0 for tomatoes
+    assert "cheese" not in result  # upward trends are omitted
 
 
 def test_trend_summary_nass_fallback():
@@ -30,8 +34,9 @@ def test_trend_summary_nass_fallback():
         {
             "parent": "wheat",
             "signal": "moderate_down",
-            "mars_change_pct": None,
-            "nass_change_pct": "-7.2",
+            "trend_signals": [
+                {"source": "nass", "change_pct": "-7.2", "z_score": "-1.8"},
+            ],
         },
     ]
     result = build_trend_summary(trends)
@@ -43,17 +48,33 @@ def test_trend_summary_empty():
     assert "monitoring" in result.lower()
 
 
-def test_trend_summary_no_pct():
+def test_trend_summary_upward_only_returns_fallback():
+    trends = [
+        {
+            "parent": "cheese",
+            "signal": "moderate_up",
+            "trend_signals": [
+                {"source": "mars", "change_pct": "8.3", "z_score": "1.6"},
+            ],
+        },
+    ]
+    result = build_trend_summary(trends)
+    assert "monitoring" in result.lower()
+
+
+def test_trend_summary_stable_skipped():
     trends = [
         {
             "parent": "garlic",
             "signal": "stable",
-            "mars_change_pct": None,
-            "nass_change_pct": None,
+            "trend_signals": [
+                {"source": "mars", "change_pct": "0.5", "z_score": "0.1"},
+                {"source": "nass", "change_pct": "0.2", "z_score": "0.05"},
+            ],
         }
     ]
     result = build_trend_summary(trends)
-    assert "monitoring" in result.lower()
+    assert "monitoring" in result.lower()  # stable items are skipped
 
 
 # --- draft_email ---
@@ -157,11 +178,11 @@ def test_draft_all_emails(mock_draft):
 
     mock_sb = MagicMock()
 
-    mock_suppliers = MagicMock()
-    mock_suppliers.data = [
-        {"id": "s1", "name": "A", "email": "a@a.com"},
-        {"id": "s2", "name": "B", "email": None},
-        {"id": "s3", "name": "C", "email": "c@c.com"},
+    mock_links = MagicMock()
+    mock_links.data = [
+        {"suppliers": {"id": "s1", "name": "A", "email": "a@a.com"}},
+        {"suppliers": {"id": "s2", "name": "B", "email": None}},
+        {"suppliers": {"id": "s3", "name": "C", "email": "c@c.com"}},
     ]
 
     mock_delete = MagicMock()
@@ -169,8 +190,8 @@ def test_draft_all_emails(mock_draft):
 
     def table_router(table_name):
         mock_t = MagicMock()
-        if table_name == "suppliers":
-            mock_t.select.return_value.eq.return_value.order.return_value.execute.return_value = mock_suppliers
+        if table_name == "restaurant_suppliers":
+            mock_t.select.return_value.eq.return_value.execute.return_value = mock_links
         elif table_name == "emails":
             mock_t.delete.return_value.eq.return_value.in_.return_value.execute.return_value = mock_delete
         return mock_t
