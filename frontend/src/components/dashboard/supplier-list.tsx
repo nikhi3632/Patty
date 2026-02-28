@@ -5,21 +5,22 @@ import type { Supplier } from "@/lib/api";
 
 interface Props {
   suppliers: Supplier[];
-  emailCount: number;
 }
 
-export default function SupplierList({ suppliers, emailCount }: Props) {
+export default function SupplierList({ suppliers }: Props) {
   const sorted = [...suppliers].sort(
     (a, b) => (a.distance_miles ?? Infinity) - (b.distance_miles ?? Infinity)
   );
+
+  const noEmail = suppliers.filter((s) => !s.email).length;
 
   return (
     <div>
       <p className="mb-3 text-sm text-muted-foreground">
         {suppliers.length} supplier{suppliers.length !== 1 ? "s" : ""} found
-        {suppliers.length > emailCount && (
+        {noEmail > 0 && (
           <span className="text-muted-foreground/70">
-            {" "}({suppliers.length - emailCount} missing contact info)
+            {" "}({noEmail} missing contact info)
           </span>
         )}
       </p>

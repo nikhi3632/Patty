@@ -161,7 +161,6 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
 
   const viewModels = buildCommodityViewModels(commodities, trends);
   const { actionable, stable, pending } = partitionViewModels(viewModels);
-  const activeEmailCount = emails.filter((e) => e.status !== "sent" && e.status !== "discarded").length;
   const pendingIds = new Set(pending.map((vm) => vm.commodity.id));
 
   // Auto-expand first actionable card (once)
@@ -364,7 +363,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
                   Could not find suppliers. Try refreshing.
                 </p>
               ) : suppliers.length > 0 ? (
-                <SupplierList suppliers={suppliers} emailCount={activeEmailCount} />
+                <SupplierList suppliers={suppliers} />
               ) : (
                 <p className="text-sm text-muted-foreground">No suppliers found yet.</p>
               )}
