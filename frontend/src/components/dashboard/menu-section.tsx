@@ -12,16 +12,17 @@ interface Props {
   restaurantId: string;
   commodities: Commodity[];
   pendingIds: Set<string>;
+  trendsReady: boolean;
   onUpdate: () => void;
 }
 
-export default function MenuSection({ restaurantId, commodities, pendingIds, onUpdate }: Props) {
+export default function MenuSection({ restaurantId, commodities, pendingIds, trendsReady, onUpdate }: Props) {
   const [menuFiles, setMenuFiles] = useState<MenuFile[]>([]);
   const [editing, setEditing] = useState(false);
 
   const tracked = commodities.filter((c) => c.status === "tracked");
-  const withData = tracked.filter((c) => !pendingIds.has(c.id));
-  const noData = tracked.filter((c) => pendingIds.has(c.id));
+  const withData = trendsReady ? tracked.filter((c) => !pendingIds.has(c.id)) : tracked;
+  const noData = trendsReady ? tracked.filter((c) => pendingIds.has(c.id)) : [];
   const other = commodities.filter((c) => c.status === "other");
 
   useEffect(() => {
@@ -48,7 +49,7 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
 
       {!editing && (
         <div className="space-y-4">
-          {/* Tracked with data */}
+          {/* Tracked with data (or all tracked while trends are loading) */}
           {withData.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
@@ -64,9 +65,15 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
                   </span>
                 ))}
               </div>
-              <p className="text-xs text-muted-foreground/70">
-                Price data available — these show up in Trends.
-              </p>
+              {trendsReady ? (
+                <p className="text-xs text-muted-foreground/70">
+                  Price data available — these show up in Trends.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground/70">
+                  Computing price trends...
+                </p>
+              )}
             </div>
           )}
 
