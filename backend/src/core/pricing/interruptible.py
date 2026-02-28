@@ -1,4 +1,5 @@
 import signal
+import threading
 
 
 SIGNALS = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -9,6 +10,10 @@ class InterruptHandler:
 
     Catches SIGINT (Ctrl+C), SIGTERM (kill/docker stop), and SIGHUP (terminal closed).
     Restores previous handlers on exit.
+
+    When used from a non-main thread, signal registration is skipped
+    (signals can only be handled in the main thread). The handler still
+    works as a context manager but `interrupted` will never become True.
 
     Usage:
         with InterruptHandler() as handler:
@@ -24,9 +29,10 @@ class InterruptHandler:
 
     def __enter__(self):
         self.interrupted = False
-        for sig in SIGNALS:
-            self.prev_handlers[sig] = signal.getsignal(sig)
-            signal.signal(sig, self.on_signal)
+        if threading.current_thread() is threading.main_thread():
+            for sig in SIGNALS:
+                self.prev_handlers[sig] = signal.getsignal(sig)
+                signal.signal(sig, self.on_signal)
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):

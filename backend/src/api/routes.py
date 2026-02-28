@@ -647,21 +647,24 @@ def generate_emails(restaurant_id: str):
 
 # --- Price Refresh ---
 
+refresh_lock = threading.Lock()
+refresh_running = False
+
 
 def refresh_prices(restaurant_id: str):
     """Background job: fetch latest NASS + MARS prices, recompute trends."""
+    global refresh_running
     try:
         logger.info("refresh started for %s", restaurant_id)
         fetch_all_nass_prices(supabase, state="US", months=12)
         fetch_all_mars_prices(supabase)
         compute_trends(supabase, restaurant_id)
-        now = datetime.now(timezone.utc).isoformat()
-        supabase.table("commodities").update({"last_refreshed": now}).gt(
-            "id", "00000000-0000-0000-0000-000000000000"
-        ).execute()
         logger.info("refresh completed for %s", restaurant_id)
     except Exception:
         logger.exception("refresh failed for %s", restaurant_id)
+    finally:
+        with refresh_lock:
+            refresh_running = False
 
 
 @router.post("/restaurants/{restaurant_id}/refresh")
@@ -669,8 +672,15 @@ def refresh_endpoint(restaurant_id: str):
     """Trigger a background price data refresh.
 
     Throttled to once per hour based on last_refreshed on any commodity.
+    Only one refresh runs at a time — concurrent requests get skipped.
     Returns immediately — the fetch runs in a background thread.
     """
+    global refresh_running
+
+    with refresh_lock:
+        if refresh_running:
+            return {"status": "skipped", "reason": "refresh already in progress"}
+
     latest = (
         supabase.table("commodities")
         .select("last_refreshed")
@@ -684,6 +694,17 @@ def refresh_endpoint(restaurant_id: str):
         last = datetime.fromisoformat(latest.data[0]["last_refreshed"])
         if datetime.now(timezone.utc) - last < REFRESH_COOLDOWN:
             return {"status": "skipped", "reason": "refreshed recently"}
+
+    with refresh_lock:
+        if refresh_running:
+            return {"status": "skipped", "reason": "refresh already in progress"}
+        refresh_running = True
+
+    # Stamp immediately so the 1-hour throttle kicks in
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("commodities").update({"last_refreshed": now}).eq(
+        "active", True
+    ).execute()
 
     thread = threading.Thread(target=refresh_prices, args=(restaurant_id,), daemon=True)
     thread.start()
