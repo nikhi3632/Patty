@@ -8,14 +8,28 @@ import httpx
 from src.config import get
 from supabase import create_client
 from supabase.lib.client_options import SyncClientOptions
+from postgrest._sync.client import SyncPostgrestClient
+from postgrest.utils import SyncClient as PostgrestHttpClient
 from storage3._sync.client import SyncStorageClient
 from storage3.utils import SyncClient as StorageHttpClient
 
-# Fix: supabase storage forces HTTP/2 which causes SSL errors on large uploads.
-# Disable HTTP/2 and disable keepalive to force fresh TLS connections per request.
+# Fix: supabase forces HTTP/2 which causes "Resource temporarily unavailable"
+# errors under concurrent requests. Disable HTTP/2 for both PostgREST and storage.
 
 
-def create_session_http1(self, base_url, headers, timeout, verify=True, proxy=None):
+def postgrest_session_http1(self, base_url, headers, timeout, verify=True, proxy=None):
+    return PostgrestHttpClient(
+        base_url=base_url,
+        headers=headers,
+        timeout=timeout,
+        verify=bool(verify),
+        proxy=proxy,
+        follow_redirects=True,
+        http2=False,
+    )
+
+
+def storage_session_http1(self, base_url, headers, timeout, verify=True, proxy=None):
     return StorageHttpClient(
         base_url=base_url,
         headers=headers,
@@ -28,7 +42,8 @@ def create_session_http1(self, base_url, headers, timeout, verify=True, proxy=No
     )
 
 
-SyncStorageClient._create_session = create_session_http1
+SyncPostgrestClient.create_session = postgrest_session_http1
+SyncStorageClient._create_session = storage_session_http1
 
 
 class LazySupabase:

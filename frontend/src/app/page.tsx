@@ -20,8 +20,9 @@ export default function Home() {
   const storedId = useSyncExternalStore(subscribe, getStoredId, () => null);
   const [processing, setProcessing] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
+  const [cleared, setCleared] = useState(false);
 
-  const restaurantId = activeId ?? storedId;
+  const restaurantId = cleared ? null : (activeId ?? storedId);
 
   let view: "onboarding" | "processing" | "dashboard";
   if (processing && restaurantId) {
@@ -36,6 +37,7 @@ export default function Home() {
     setActiveId(id);
     localStorage.setItem(LS_KEY, id);
     setProcessing(true);
+    setCleared(false);
   }
 
   function handleProcessingComplete() {
@@ -60,6 +62,7 @@ export default function Home() {
             localStorage.removeItem(LS_KEY);
             setActiveId(null);
             setProcessing(false);
+            setCleared(true);
           }}
         />
       )}
