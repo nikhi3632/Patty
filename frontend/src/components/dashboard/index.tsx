@@ -391,7 +391,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
               restaurantId={restaurantId}
               commodities={commodities}
               pendingIds={pendingIds}
-              trendsReady={trends.length > 0}
+              trendsReady={pipelineStatus.trends !== "running" && trends.length > 0}
               onUpdate={load}
             />
           )}

@@ -14,7 +14,7 @@ type StepStatus = "pending" | "running" | "done" | "error";
 function stepDetail(result?: StreamEventResult): string {
   if (!result) return "";
   if (result.skipped) return "Already parsed";
-  return `Found ${result.tracked ?? 0} trackable commodities, ${result.other ?? 0} other ingredients`;
+  return `Found ${(result.tracked ?? 0) + (result.other ?? 0)} ingredients, tracking ${result.tracked ?? 0}`;
 }
 
 export default function Processing({ restaurantId, onComplete }: Props) {
