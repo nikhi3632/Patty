@@ -66,3 +66,13 @@ class LazySupabase:
 
 
 supabase = LazySupabase()
+
+
+def create_supabase_client():
+    """Create a fresh Supabase client. Use for background threads that
+    must not share the connection pool with the main request threads."""
+    return create_client(
+        get("SUPABASE_URL"),
+        get("SUPABASE_SERVICE_ROLE_KEY"),
+        options=SyncClientOptions(storage_client_timeout=120),
+    )

@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 from fastapi import APIRouter, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from src.db.client import supabase
+from src.db.client import supabase, create_supabase_client
 from src.core.pricing.market_selector import find_nearest_market
 from src.core.menu.parser import parse_menu
 from src.core.menu.matcher import add_ingredient
@@ -652,14 +652,19 @@ refresh_running = False
 
 
 def refresh_prices(restaurant_id: str):
-    """Background job: fetch latest prices for tracked commodities only, then recompute trends."""
+    """Background job: fetch latest prices for tracked commodities only, then recompute trends.
+
+    Uses its own Supabase client to avoid sharing the connection pool with
+    request-handling threads (which causes SSL corruption).
+    """
     global refresh_running
     try:
         logger.info("refresh started for %s", restaurant_id)
+        db = create_supabase_client()
 
         # Get the parents this restaurant tracks
         tracked = (
-            supabase.table("restaurant_commodities")
+            db.table("restaurant_commodities")
             .select("commodities(parent)")
             .eq("restaurant_id", restaurant_id)
             .eq("status", "tracked")
@@ -675,7 +680,7 @@ def refresh_prices(restaurant_id: str):
 
         # Fetch only the commodity records matching tracked parents
         registry = (
-            supabase.table("commodities")
+            db.table("commodities")
             .select("source, source_params")
             .in_("parent", list(parents))
             .execute()
@@ -685,17 +690,17 @@ def refresh_prices(restaurant_id: str):
         for row in registry.data:
             params = row["source_params"]
             if row["source"] == "NASS":
-                fetch_and_store_nass(supabase, params["commodity_desc"], "US", 12)
+                fetch_and_store_nass(db, params["commodity_desc"], "US", 12)
             elif row["source"] == "MARS":
                 slug_id = params["slug_id"]
                 if slug_id not in seen_slugs:
                     seen_slugs.add(slug_id)
                     is_daily = "Terminal" in params.get("market_types", [])
                     fetch_and_store_mars(
-                        supabase, slug_id, last_reports=30 if is_daily else 12
+                        db, slug_id, last_reports=30 if is_daily else 12
                     )
 
-        compute_trends(supabase, restaurant_id)
+        compute_trends(db, restaurant_id)
         logger.info("refresh completed for %s", restaurant_id)
     except Exception:
         logger.exception("refresh failed for %s", restaurant_id)

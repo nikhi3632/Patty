@@ -19,7 +19,7 @@ import {
   type Calibration,
   type StreamEvent,
 } from "@/lib/api";
-import { buildCommodityViewModels, partitionViewModels } from "./commodity-data";
+import { buildCommodityViewModels, partitionViewModels, titleCase, type CommodityViewModel } from "./commodity-data";
 import Sidebar, { type View } from "./sidebar";
 import Summary from "./summary";
 import Commodities from "./commodities";
@@ -217,8 +217,8 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
 
   // Disable tabs whose data isn't ready yet
   const disabledTabs = new Set<View>();
-  if (sectionLoading("suppliers") && suppliers.length === 0) disabledTabs.add("suppliers");
-  if (sectionLoading("emails") && emails.length === 0) disabledTabs.add("outreach");
+  if (pipelineStatus.suppliers === "running" || (sectionLoading("suppliers") && suppliers.length === 0)) disabledTabs.add("suppliers");
+  if (pipelineStatus.emails === "running" || (sectionLoading("emails") && emails.length === 0)) disabledTabs.add("outreach");
   if (sectionLoading("trends") && trends.length === 0) disabledTabs.add("trends");
 
   return (
@@ -310,7 +310,11 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
                     </div>
                   )}
 
-                  {stable.length > 0 && (
+                  {stable.length > 0 && !systemView && (
+                    <StableSummary stable={stable} />
+                  )}
+
+                  {stable.length > 0 && systemView && (
                     <div className="space-y-3">
                       <h3 className="text-sm font-medium uppercase tracking-wider text-muted-foreground">
                         Within Normal Range
@@ -394,6 +398,39 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
         </div>
       </div>
     </>
+  );
+}
+
+function StableSummary({ stable }: { stable: CommodityViewModel[] }) {
+  const names = stable.map((vm) =>
+    titleCase(vm.commodity.commodities?.parent ?? vm.commodity.raw_ingredient_name)
+  );
+
+  // Find the most recent computed_at across stable trends for "last checked"
+  const latest = stable.reduce<string | null>((best, vm) => {
+    const at = vm.trend?.computed_at;
+    if (!at) return best;
+    return !best || at > best ? at : best;
+  }, null);
+
+  const lastChecked = latest
+    ? new Date(latest).toLocaleString("en-US", { month: "short", year: "numeric" })
+    : null;
+
+  return (
+    <div className="rounded-lg border border-muted-foreground/15 px-4 py-3">
+      <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+        Within Normal Range
+      </p>
+      <p className="mt-1 text-sm text-foreground">
+        {stable.length} commodities within expected range: {names.join(", ")}
+      </p>
+      {lastChecked && (
+        <p className="mt-1 text-xs text-muted-foreground/70">
+          Last checked {lastChecked}
+        </p>
+      )}
+    </div>
   );
 }
 

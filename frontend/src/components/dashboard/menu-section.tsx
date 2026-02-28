@@ -20,8 +20,8 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
   const [editing, setEditing] = useState(false);
 
   const tracked = commodities.filter((c) => c.status === "tracked");
-  const active = tracked.filter((c) => !pendingIds.has(c.id));
-  const awaiting = tracked.filter((c) => pendingIds.has(c.id));
+  const withData = tracked.filter((c) => !pendingIds.has(c.id));
+  const noData = tracked.filter((c) => pendingIds.has(c.id));
   const other = commodities.filter((c) => c.status === "other");
 
   useEffect(() => {
@@ -46,16 +46,16 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
         </div>
       )}
 
-      {/* Tracked ingredient pills — split into active and awaiting */}
       {!editing && (
         <div className="space-y-4">
-          {active.length > 0 && (
+          {/* Tracked with data */}
+          {withData.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
-                {active.length} active
+                Tracked ({withData.length})
               </p>
               <div className="flex flex-wrap gap-2">
-                {active.map((c) => (
+                {withData.map((c) => (
                   <span
                     key={c.id}
                     className="rounded-full border border-primary/30 bg-primary/10 px-3 py-1 text-xs font-medium text-primary"
@@ -64,16 +64,20 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
                   </span>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground/70">
+                Price data available — these show up in Trends.
+              </p>
             </div>
           )}
 
-          {awaiting.length > 0 && (
+          {/* Tracked, no data */}
+          {noData.length > 0 && (
             <div className="space-y-2">
               <p className="text-sm text-muted-foreground">
-                {awaiting.length} awaiting data
+                Tracked, no data ({noData.length})
               </p>
               <div className="flex flex-wrap gap-2">
-                {awaiting.map((c) => (
+                {noData.map((c) => (
                   <span
                     key={c.id}
                     className="rounded-full border border-dashed border-muted-foreground/40 px-3 py-1 text-xs font-medium text-muted-foreground"
@@ -82,10 +86,13 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
                   </span>
                 ))}
               </div>
+              <p className="text-xs text-muted-foreground/70">
+                No USDA pricing available for these commodities.
+              </p>
             </div>
           )}
 
-          {active.length === 0 && awaiting.length === 0 && (
+          {withData.length === 0 && noData.length === 0 && (
             <p className="text-sm text-muted-foreground">No tracked ingredients</p>
           )}
 
@@ -96,10 +103,15 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
           >
             Edit ingredients
           </Button>
+
+          {/* Other — flat list, no sub-groups */}
+          {other.length > 0 && (
+            <OtherSection other={other} />
+          )}
         </div>
       )}
 
-      {/* Edit mode — full review component */}
+      {/* Edit mode */}
       {editing && (
         <div className="space-y-3">
           <Commodities
@@ -118,19 +130,12 @@ export default function MenuSection({ restaurantId, commodities, pendingIds, onU
           </Button>
         </div>
       )}
-
-      {/* Other ingredients summary */}
-      {!editing && other.length > 0 && (
-        <OtherSection other={other} />
-      )}
     </div>
   );
 }
 
 function OtherSection({ other }: { other: Commodity[] }) {
   const [open, setOpen] = useState(false);
-  const matchedNoData = other.filter((c) => c.commodity_id !== null);
-  const unmatched = other.filter((c) => c.commodity_id === null);
 
   return (
     <div className="pt-2">
@@ -143,44 +148,23 @@ function OtherSection({ other }: { other: Commodity[] }) {
         ) : (
           <ChevronRight className="h-4 w-4" />
         )}
-        {other.length} other ingredient{other.length !== 1 ? "s" : ""}
+        Other ({other.length})
       </button>
       {open && (
-        <div className="mt-2 space-y-3">
-          {matchedNoData.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">
-                Matched, no pricing data for your market ({matchedNoData.length})
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {matchedNoData.map((c) => (
-                  <span
-                    key={c.id}
-                    className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
-                  >
-                    {titleCase(c.commodities?.parent ?? c.raw_ingredient_name)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
-          {unmatched.length > 0 && (
-            <div className="space-y-1">
-              <p className="text-xs text-muted-foreground">
-                Not in our database ({unmatched.length})
-              </p>
-              <div className="flex flex-wrap gap-2">
-                {unmatched.map((c) => (
-                  <span
-                    key={c.id}
-                    className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
-                  >
-                    {titleCase(c.raw_ingredient_name)}
-                  </span>
-                ))}
-              </div>
-            </div>
-          )}
+        <div className="mt-2 space-y-2">
+          <div className="flex flex-wrap gap-2">
+            {other.map((c) => (
+              <span
+                key={c.id}
+                className="rounded-full bg-muted px-3 py-1 text-xs text-muted-foreground"
+              >
+                {titleCase(c.commodities?.parent ?? c.raw_ingredient_name)}
+              </span>
+            ))}
+          </div>
+          <p className="text-xs text-muted-foreground/70">
+            Found on your menu but not tracked.
+          </p>
         </div>
       )}
     </div>
