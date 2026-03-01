@@ -6,7 +6,6 @@ import {
   Mail,
   UtensilsCrossed,
   Settings,
-  Plus,
 } from "lucide-react";
 
 export type View =
@@ -28,7 +27,6 @@ interface Props {
   onNavigate: (view: View) => void;
   onSystemView: () => void;
   systemView: boolean;
-  onNewRestaurant?: () => void;
   disabledTabs?: Set<View>;
 }
 
@@ -65,7 +63,7 @@ function NavButton({
   );
 }
 
-export default function Sidebar({ active, onNavigate, onSystemView, systemView, onNewRestaurant, disabledTabs }: Props) {
+export default function Sidebar({ active, onNavigate, onSystemView, systemView, disabledTabs }: Props) {
   return (
     <nav className="fixed left-0 top-0 z-20 hidden h-screen w-12 flex-col items-center gap-1 border-r bg-background pt-20 md:flex">
       {workflow.map((item) => (
@@ -86,14 +84,6 @@ export default function Sidebar({ active, onNavigate, onSystemView, systemView, 
             onClick={onSystemView}
             icon={<Settings className="h-4 w-4" />}
             label="System View"
-          />
-        )}
-        {onNewRestaurant && (
-          <NavButton
-            active={false}
-            onClick={onNewRestaurant}
-            icon={<Plus className="h-4 w-4" />}
-            label="New Restaurant"
           />
         )}
       </div>

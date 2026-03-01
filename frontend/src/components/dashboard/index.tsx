@@ -237,7 +237,6 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
         onNavigate={setActiveView}
         onSystemView={toggleSystemView}
         systemView={systemView}
-        onNewRestaurant={onNewRestaurant}
         disabledTabs={disabledTabs}
       />
 

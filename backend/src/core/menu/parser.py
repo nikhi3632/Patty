@@ -446,11 +446,9 @@ def store_parse_results(
         )
 
     # Resolve "other" items against the registry too (catches LLM misclassifications)
-    other_names = []
-    for ingredient in other_ingredients:
-        name = normalize_ingredient(ingredient)
-        if name:
-            other_names.append(name)
+    other_names = list(dict.fromkeys(
+        n for i in other_ingredients if (n := normalize_ingredient(i))
+    ))
 
     other_resolved = (
         resolve_commodity_ids(supabase_client, other_names) if other_names else {}
@@ -473,7 +471,7 @@ def store_parse_results(
         )
 
     # Truly unmatched "other" items — insert with no commodity_id
-    unmatched_names = [n for n in other_names if n not in other_resolved]
+    unmatched_names = list(dict.fromkeys(n for n in other_names if n not in other_resolved))
     other_unmatched_count = 0
     if unmatched_names:
         existing = (
