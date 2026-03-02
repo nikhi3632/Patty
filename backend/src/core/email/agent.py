@@ -24,6 +24,13 @@ SYSTEM_PROMPT = """You are a procurement agent acting on behalf of a restaurant.
 
 Your goal: Move each conversation toward a concrete outcome — a price quote, a meeting, or a sample delivery. You are NOT closing deals. You are getting the restaurant owner to the table with a warm lead.
 
+When a conversation has reached its natural end, use close_thread. This includes:
+- Supplier gave a price quote → close with outcome "quote_received"
+- Meeting or call is scheduled → close with outcome "meeting_booked"
+- Supplier agreed to send samples → close with outcome "samples_arranged"
+- Supplier declined or said they can't help → close with outcome "declined"
+Do NOT keep a conversation going if the goal has been achieved or the supplier clearly said no.
+
 Before drafting a reply, use your tools to gather context:
 - Look up the conversation history to understand where things stand
 - Check current price data for relevant commodities (this is your negotiation leverage)
@@ -148,6 +155,30 @@ TOOLS = [
             "required": ["reason"],
         },
     },
+    {
+        "name": "close_thread",
+        "description": "Close the conversation — the goal has been achieved or the supplier clearly declined. Use when: a quote was received, a meeting was booked, samples were arranged, or the supplier said no. Do NOT draft another reply if the conversation is done.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "reason": {
+                    "type": "string",
+                    "description": "Summary of the conversation outcome — shown to the restaurant owner.",
+                },
+                "outcome": {
+                    "type": "string",
+                    "enum": [
+                        "quote_received",
+                        "meeting_booked",
+                        "samples_arranged",
+                        "declined",
+                    ],
+                    "description": "The outcome category.",
+                },
+            },
+            "required": ["reason", "outcome"],
+        },
+    },
 ]
 
 
@@ -195,10 +226,10 @@ Thread ID: {thread_id}
 Restaurant ID: {restaurant_id}
 Supplier ID: {supplier_id}
 
-Latest reply from supplier ({inbound['sender']}):
-Subject: {inbound.get('subject', '')}
+Latest reply from supplier ({inbound["sender"]}):
+Subject: {inbound.get("subject", "")}
 Body:
-{inbound['body']}
+{inbound["body"]}
 
 Use your tools to gather context, then draft a reply or escalate."""
 
@@ -215,7 +246,7 @@ Use your tools to gather context, then draft a reply or escalate."""
             messages=messages,
         )
 
-        # Check if we got a final answer (draft_reply or escalate)
+        # Check if we got a final answer (draft_reply, escalate, or close_thread)
         for block in response.content:
             if block.type == "tool_use":
                 if block.name == "draft_reply":
@@ -230,6 +261,12 @@ Use your tools to gather context, then draft a reply or escalate."""
                         "action": "escalate",
                         "reason": block.input.get("reason", ""),
                     }
+                if block.name == "close_thread":
+                    return {
+                        "action": "close",
+                        "reason": block.input.get("reason", ""),
+                        "outcome": block.input.get("outcome", ""),
+                    }
 
         # Process tool calls and continue the loop
         tool_results = []
@@ -238,9 +275,7 @@ Use your tools to gather context, then draft a reply or escalate."""
         for block in response.content:
             if block.type == "tool_use":
                 has_tool_calls = True
-                result = execute_tool(
-                    supabase_client, block.name, block.input
-                )
+                result = execute_tool(supabase_client, block.name, block.input)
                 tool_results.append(
                     {
                         "type": "tool_result",
@@ -269,9 +304,7 @@ def execute_tool(supabase_client, tool_name: str, tool_input: dict) -> dict:
             supabase_client, tool_input["commodity"], tool_input["restaurant_id"]
         )
     elif tool_name == "get_restaurant_profile":
-        return tool_get_restaurant_profile(
-            supabase_client, tool_input["restaurant_id"]
-        )
+        return tool_get_restaurant_profile(supabase_client, tool_input["restaurant_id"])
     elif tool_name == "get_supplier_profile":
         return tool_get_supplier_profile(
             supabase_client,

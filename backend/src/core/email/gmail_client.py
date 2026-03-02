@@ -5,7 +5,6 @@ Credentials file: backend/gmail_credentials.json
 Token file: backend/token.json
 """
 
-import json
 import os
 import re
 import base64

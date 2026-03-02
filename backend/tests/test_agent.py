@@ -33,7 +33,12 @@ def test_tool_get_price_data():
                 "parent": "chicken",
                 "signal": "strong_down",
                 "trend_signals": [
-                    {"source": "mars", "change_pct": "-15.2", "z_score": "-2.8", "market": "Chicago"},
+                    {
+                        "source": "mars",
+                        "change_pct": "-15.2",
+                        "z_score": "-2.8",
+                        "market": "Chicago",
+                    },
                 ],
             }
         ]
@@ -56,7 +61,11 @@ def test_tool_get_restaurant_profile():
     mock_sb = MagicMock()
 
     mock_restaurant = MagicMock()
-    mock_restaurant.data = {"name": "Il Porcellino", "address": "59 W Hubbard", "cuisine_type": "Italian"}
+    mock_restaurant.data = {
+        "name": "Il Porcellino",
+        "address": "59 W Hubbard",
+        "cuisine_type": "Italian",
+    }
 
     mock_tracked = MagicMock()
     mock_tracked.data = [
@@ -195,7 +204,11 @@ def test_run_agent_draft_reply(mock_get, mock_anthropic_cls):
 
     mock_inbound = MagicMock()
     mock_inbound.data = [
-        {"body": "We can offer competitive pricing.", "sender": "supplier@co.com", "subject": "Re: Inquiry"}
+        {
+            "body": "We can offer competitive pricing.",
+            "sender": "supplier@co.com",
+            "subject": "Re: Inquiry",
+        }
     ]
 
     def table_router(table_name):
@@ -246,7 +259,11 @@ def test_run_agent_escalate(mock_get, mock_anthropic_cls):
 
     mock_inbound = MagicMock()
     mock_inbound.data = [
-        {"body": "Please sign the attached agreement.", "sender": "supplier@co.com", "subject": "Contract"}
+        {
+            "body": "Please sign the attached agreement.",
+            "sender": "supplier@co.com",
+            "subject": "Contract",
+        }
     ]
 
     def table_router(table_name):
@@ -310,7 +327,11 @@ def test_run_agent_tool_use_loop(mock_get, mock_anthropic_cls):
 
     mock_inbound = MagicMock()
     mock_inbound.data = [
-        {"body": "Sounds great, what quantities?", "sender": "supplier@co.com", "subject": "Re: Inquiry"}
+        {
+            "body": "Sounds great, what quantities?",
+            "sender": "supplier@co.com",
+            "subject": "Re: Inquiry",
+        }
     ]
 
     mock_history = MagicMock()

@@ -30,6 +30,7 @@ import EmailSection from "./email-section";
 import SupplierList from "./supplier-list";
 import MenuSection from "./menu-section";
 import ThreadSection from "./thread-section";
+import NotificationBell from "./notification-bell";
 
 interface Props {
   restaurantId: string;
@@ -49,6 +50,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
   const [systemView, setSystemView] = useState(false);
   const [loading, setLoading] = useState(true);
   const [activeView, setActiveView] = useState<View>("menu");
+  const [selectedThreadId, setSelectedThreadId] = useState<string | null>(null);
   const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
   const didAutoExpand = useRef(false);
 
@@ -254,14 +256,23 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
             <h1 className="text-xl font-semibold tracking-tight">Patty</h1>
             <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
           </div>
-          {onNewRestaurant && (
-            <button
-              onClick={onNewRestaurant}
-              className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
-            >
-              Reset
-            </button>
-          )}
+          <div className="flex items-center gap-2">
+            <NotificationBell
+              restaurantId={restaurantId}
+              onNavigateToThread={(threadId) => {
+                setActiveView("conversations");
+                setSelectedThreadId(threadId);
+              }}
+            />
+            {onNewRestaurant && (
+              <button
+                onClick={onNewRestaurant}
+                className="rounded-md border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors"
+              >
+                Reset
+              </button>
+            )}
+          </div>
         </div>
 
         {/* Summary — always visible, count only items with trend data */}
@@ -403,7 +414,12 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
 
           {/* Conversations — procurement agent threads */}
           {activeView === "conversations" && (
-            <ThreadSection threads={threads} onUpdate={load} visible={activeView === "conversations"} />
+            <ThreadSection
+              threads={threads}
+              onUpdate={load}
+              selectedThreadId={selectedThreadId}
+              onClearSelection={() => setSelectedThreadId(null)}
+            />
           )}
 
           {/* Menu & Ingredients — menu preview + review component */}

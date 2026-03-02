@@ -17,7 +17,7 @@ def test_poll_inbox_no_service(mock_service):
 def test_poll_inbox_no_threads(mock_service):
     mock_service.return_value = MagicMock()
     mock_sb = MagicMock()
-    mock_sb.table.return_value.select.return_value.in_.return_value.execute.return_value = MagicMock(
+    mock_sb.table.return_value.select.return_value.not_.is_.return_value.execute.return_value = MagicMock(
         data=[]
     )
     result = poll_inbox(mock_sb)
@@ -66,7 +66,9 @@ def test_check_thread_new_inbound(mock_get_msgs):
         data=[{"id": "t1", "state": "draft_ready"}]
     )
 
-    found = check_thread_for_replies(mock_service, mock_sb, "t1", "gmail-thread-1")
+    found = check_thread_for_replies(
+        mock_service, mock_sb, "t1", "gmail-thread-1", "waiting_reply"
+    )
     assert found == 1
 
 
@@ -93,7 +95,9 @@ def test_check_thread_no_new_messages(mock_get_msgs):
     mock_existing.data = [{"gmail_message_id": "msg-outbound"}]
     mock_sb.table.return_value.select.return_value.eq.return_value.execute.return_value = mock_existing
 
-    found = check_thread_for_replies(mock_service, mock_sb, "t1", "gmail-thread-1")
+    found = check_thread_for_replies(
+        mock_service, mock_sb, "t1", "gmail-thread-1", "waiting_reply"
+    )
     assert found == 0
 
 

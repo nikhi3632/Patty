@@ -26,8 +26,9 @@ from src.core.suppliers.finder import find_suppliers
 from src.core.email.drafter import draft_all_emails
 from src.config import get
 from src.core.email.sender import send_email
-from src.core.email.poller import poll_inbox
+from src.core.email.poller import poll_inbox, check_followups
 from src.core.email.agent import run_procurement_agent
+from src.core.email.notifications import notify
 
 logger = logging.getLogger(__name__)
 
@@ -699,12 +700,279 @@ async def gmail_webhook(request: Request):
 
     if data:
         decoded = json.loads(b64.b64decode(data).decode("utf-8"))
-        logger.info("Gmail webhook: emailAddress=%s historyId=%s",
-                     decoded.get("emailAddress"), decoded.get("historyId"))
+        logger.info(
+            "Gmail webhook: emailAddress=%s historyId=%s",
+            decoded.get("emailAddress"),
+            decoded.get("historyId"),
+        )
 
     result = poll_inbox(supabase)
     logger.info("Gmail webhook poll result: %s", result)
+
+    # Notify + auto-run agent on threads that received new replies
+    reopened = set(result.get("reopened_thread_ids", []))
+    for thread_id in result.get("updated_thread_ids", []):
+        try:
+            t = (
+                supabase.table("email_threads")
+                .select("restaurant_id, suppliers(name)")
+                .eq("id", thread_id)
+                .single()
+                .execute()
+            )
+            supplier_name = t.data.get("suppliers", {}).get("name", "supplier")
+            if thread_id in reopened:
+                notify(
+                    supabase,
+                    t.data["restaurant_id"],
+                    thread_id,
+                    "reopened",
+                    f"Re-opened: {supplier_name} replied after close",
+                )
+            else:
+                notify(
+                    supabase,
+                    t.data["restaurant_id"],
+                    thread_id,
+                    "inbound_reply",
+                    f"New reply from {supplier_name}",
+                )
+        except Exception:
+            pass
+        run_agent_and_maybe_send(thread_id)
+
+    # Check for stale threads needing follow-up
+    followups = check_followups(supabase)
+    for thread_id in followups.get("nudge", []):
+        run_agent_and_maybe_send(thread_id)
+
+    # Notify about auto-closed threads
+    for thread_id in followups.get("close", []):
+        try:
+            t = (
+                supabase.table("email_threads")
+                .select("restaurant_id, suppliers(name)")
+                .eq("id", thread_id)
+                .single()
+                .execute()
+            )
+            notify(
+                supabase,
+                t.data["restaurant_id"],
+                thread_id,
+                "closed",
+                f"Auto-closed: {t.data.get('suppliers', {}).get('name', 'supplier')}",
+                "No reply after follow-up attempts",
+            )
+        except Exception:
+            pass
+
     return {"ok": True}
+
+
+def run_agent_and_maybe_send(thread_id: str):
+    """Run the procurement agent on a thread, store the result, and auto-send if in auto mode."""
+    try:
+        thread_row = (
+            supabase.table("email_threads")
+            .select(
+                "restaurant_id, approval_mode, supplier_id, gmail_thread_id, suppliers(name)"
+            )
+            .eq("id", thread_id)
+            .single()
+            .execute()
+        )
+        restaurant_id = thread_row.data["restaurant_id"]
+        supplier_name = thread_row.data.get("suppliers", {}).get("name", "Supplier")
+
+        agent_result = run_procurement_agent(supabase, thread_id)
+        logger.info(
+            "Auto-agent on %s: %s",
+            thread_id,
+            agent_result.get("action", agent_result.get("error")),
+        )
+
+        if agent_result.get("action") == "draft":
+            msg_row = (
+                supabase.table("email_messages")
+                .insert(
+                    {
+                        "thread_id": thread_id,
+                        "direction": "outbound",
+                        "sender": get("FROM_EMAIL") or "anamnikhilesh@gmail.com",
+                        "recipient": "",
+                        "subject": agent_result["subject"],
+                        "body": "",
+                        "draft_body": agent_result["body"],
+                        "agent_reasoning": agent_result["reasoning"],
+                    }
+                )
+                .execute()
+            )
+
+            if thread_row.data.get("approval_mode") == "auto":
+                auto_send_draft(
+                    supabase,
+                    thread_id,
+                    msg_row.data[0]["id"],
+                    agent_result,
+                    thread_row.data,
+                )
+                notify(
+                    supabase,
+                    restaurant_id,
+                    thread_id,
+                    "auto_sent",
+                    f"Auto-sent reply to {supplier_name}",
+                    agent_result.get("reasoning"),
+                )
+            else:
+                notify(
+                    supabase,
+                    restaurant_id,
+                    thread_id,
+                    "draft_ready",
+                    f"Draft ready for {supplier_name}",
+                    agent_result.get("reasoning"),
+                )
+
+        elif agent_result.get("action") == "escalate":
+            supabase.table("email_threads").update({"state": "escalated"}).eq(
+                "id", thread_id
+            ).execute()
+            notify(
+                supabase,
+                restaurant_id,
+                thread_id,
+                "escalated",
+                f"Escalated: {supplier_name}",
+                agent_result.get("reason"),
+            )
+
+        elif agent_result.get("action") == "close":
+            now = datetime.now(timezone.utc).isoformat()
+            supabase.table("email_threads").update(
+                {
+                    "state": "closed",
+                    "closed_reason": agent_result.get("reason", ""),
+                    "closed_outcome": agent_result.get("outcome", ""),
+                    "updated_at": now,
+                }
+            ).eq("id", thread_id).execute()
+            notify(
+                supabase,
+                restaurant_id,
+                thread_id,
+                "closed",
+                f"Closed: {supplier_name}",
+                agent_result.get("reason"),
+            )
+
+    except Exception as exc:
+        logger.warning("Auto-agent failed for %s: %s", thread_id, exc)
+
+
+def auto_send_draft(supabase_client, thread_id, msg_id, agent_result, thread_data):
+    """Send an agent draft automatically (auto mode). Same logic as approve endpoint."""
+    import base64 as b64_mod
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    from src.core.email.gmail_client import get_gmail_service
+
+    supplier = (
+        supabase_client.table("suppliers")
+        .select("email")
+        .eq("id", thread_data["supplier_id"])
+        .single()
+        .execute()
+    )
+    to_email = get("TEST_EMAIL_OVERRIDE") or supplier.data["email"]
+
+    service = get_gmail_service()
+    if not service:
+        logger.warning("Auto-send failed for %s: Gmail not configured", thread_id)
+        return
+
+    msg = MIMEMultipart("alternative")
+    msg["to"] = to_email
+    msg["subject"] = agent_result["subject"]
+    msg.attach(MIMEText(agent_result["body"], "plain"))
+
+    gmail_thread_id = thread_data.get("gmail_thread_id")
+    raw = b64_mod.urlsafe_b64encode(msg.as_bytes()).decode()
+    send_body = {"raw": raw}
+    if gmail_thread_id:
+        send_body["threadId"] = gmail_thread_id
+
+    gmail_result = (
+        service.users().messages().send(userId="me", body=send_body).execute()
+    )
+
+    now = datetime.now(timezone.utc).isoformat()
+    supabase_client.table("email_messages").update(
+        {
+            "final_body": agent_result["body"],
+            "recipient": to_email,
+            "gmail_message_id": gmail_result.get("id", ""),
+            "auto_sent": True,
+        }
+    ).eq("id", msg_id).execute()
+
+    supabase_client.table("email_threads").update(
+        {"state": "waiting_reply", "updated_at": now}
+    ).eq("id", thread_id).execute()
+
+    logger.info("Auto-sent draft for thread %s to %s", thread_id, to_email)
+
+
+@router.patch("/email/threads/{thread_id}/mode")
+def update_thread_mode(thread_id: str, payload: dict):
+    """Toggle approval mode for a thread (manual/auto)."""
+    mode = payload.get("approval_mode")
+    if mode not in ("manual", "auto"):
+        raise HTTPException(400, "approval_mode must be 'manual' or 'auto'")
+    supabase.table("email_threads").update({"approval_mode": mode}).eq(
+        "id", thread_id
+    ).execute()
+    return {"data": {"approval_mode": mode}}
+
+
+class CloseBody(BaseModel):
+    reason: str
+    outcome: str
+
+
+@router.post("/email/threads/{thread_id}/close")
+def close_thread(thread_id: str, payload: CloseBody):
+    """Manually close a thread (owner action)."""
+    valid_outcomes = {
+        "quote_received",
+        "meeting_booked",
+        "samples_arranged",
+        "declined",
+        "no_response",
+        "owner_closed",
+    }
+    if payload.outcome not in valid_outcomes:
+        raise HTTPException(400, f"outcome must be one of {valid_outcomes}")
+
+    now = datetime.now(timezone.utc).isoformat()
+    result = (
+        supabase.table("email_threads")
+        .update(
+            {
+                "state": "closed",
+                "closed_reason": payload.reason,
+                "closed_outcome": payload.outcome,
+                "updated_at": now,
+            }
+        )
+        .eq("id", thread_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Thread not found")
+    return {"data": result.data[0]}
 
 
 @router.post("/email/watch")
@@ -719,13 +987,17 @@ def register_gmail_watch():
     if not service:
         raise HTTPException(500, "Gmail API not configured")
 
-    result = service.users().watch(
-        userId="me",
-        body={
-            "topicName": "projects/project-88283f31-441d-41b5-a0f/topics/gmail-notifications",
-            "labelIds": ["INBOX"],
-        },
-    ).execute()
+    result = (
+        service.users()
+        .watch(
+            userId="me",
+            body={
+                "topicName": "projects/project-88283f31-441d-41b5-a0f/topics/gmail-notifications",
+                "labelIds": ["INBOX"],
+            },
+        )
+        .execute()
+    )
 
     return {"data": result}
 
@@ -751,13 +1023,24 @@ def run_agent_on_thread(thread_id: str):
                 "agent_reasoning": result["reasoning"],
             }
         ).execute()
-        supabase.table("email_threads").update(
-            {"state": "draft_ready"}
-        ).eq("id", thread_id).execute()
+        supabase.table("email_threads").update({"state": "draft_ready"}).eq(
+            "id", thread_id
+        ).execute()
 
     elif result["action"] == "escalate":
+        supabase.table("email_threads").update({"state": "escalated"}).eq(
+            "id", thread_id
+        ).execute()
+
+    elif result["action"] == "close":
+        now = datetime.now(timezone.utc).isoformat()
         supabase.table("email_threads").update(
-            {"state": "escalated"}
+            {
+                "state": "closed",
+                "closed_reason": result.get("reason", ""),
+                "closed_outcome": result.get("outcome", ""),
+                "updated_at": now,
+            }
         ).eq("id", thread_id).execute()
 
     return {"data": result}
@@ -859,6 +1142,48 @@ def approve_thread_draft(thread_id: str, payload: ApproveBody = ApproveBody()):
             "routed_to": to_email,
         }
     }
+
+
+# --- Notifications ---
+
+
+@router.get("/restaurants/{restaurant_id}/notifications")
+def list_notifications(restaurant_id: str, unread_only: bool = False):
+    """List notifications for a restaurant, newest first."""
+    query = (
+        supabase.table("notifications")
+        .select("*")
+        .eq("restaurant_id", restaurant_id)
+        .order("created_at", desc=True)
+        .limit(50)
+    )
+    if unread_only:
+        query = query.eq("read", False)
+    rows = query.execute()
+    return {"data": rows.data}
+
+
+@router.patch("/notifications/{notification_id}/read")
+def mark_notification_read(notification_id: str):
+    """Mark a single notification as read."""
+    result = (
+        supabase.table("notifications")
+        .update({"read": True})
+        .eq("id", notification_id)
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(404, "Notification not found")
+    return {"data": result.data[0]}
+
+
+@router.post("/restaurants/{restaurant_id}/notifications/read-all")
+def mark_all_read(restaurant_id: str):
+    """Mark all notifications as read for a restaurant."""
+    supabase.table("notifications").update({"read": True}).eq(
+        "restaurant_id", restaurant_id
+    ).eq("read", False).execute()
+    return {"ok": True}
 
 
 # --- Restaurant Management ---

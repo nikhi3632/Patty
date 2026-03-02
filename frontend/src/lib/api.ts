@@ -345,6 +345,7 @@ export interface EmailThread {
   state: "outreach_sent" | "waiting_reply" | "draft_ready" | "escalated" | "approved" | "closed";
   approval_mode: "manual" | "auto";
   closed_reason: string | null;
+  closed_outcome: string | null;
   created_at: string;
   updated_at: string;
   suppliers: {
@@ -386,6 +387,65 @@ export async function approveDraft(
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(edits ?? {}),
     }
+  );
+}
+
+export async function closeThread(
+  threadId: string,
+  reason: string,
+  outcome: string
+) {
+  return json<{ data: EmailThread }>(
+    `/email/threads/${threadId}/close`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason, outcome }),
+    }
+  );
+}
+
+export async function updateThreadMode(threadId: string, mode: "manual" | "auto") {
+  return json<{ data: { approval_mode: string } }>(
+    `/email/threads/${threadId}/mode`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ approval_mode: mode }),
+    }
+  );
+}
+
+// --- Notifications ---
+
+export interface Notification {
+  id: string;
+  restaurant_id: string;
+  thread_id: string | null;
+  type: string;
+  title: string;
+  body: string | null;
+  read: boolean;
+  created_at: string;
+}
+
+export async function listNotifications(restaurantId: string, unreadOnly = false) {
+  const params = unreadOnly ? "?unread_only=true" : "";
+  return json<{ data: Notification[] }>(
+    `/restaurants/${restaurantId}/notifications${params}`
+  );
+}
+
+export async function markNotificationRead(notificationId: string) {
+  return json<{ data: Notification }>(`/notifications/${notificationId}/read`, {
+    method: "PATCH",
+  });
+}
+
+export async function markAllNotificationsRead(restaurantId: string) {
+  return json<{ ok: boolean }>(
+    `/restaurants/${restaurantId}/notifications/read-all`,
+    { method: "POST" }
   );
 }
 

@@ -8,6 +8,7 @@ CREATE TABLE IF NOT EXISTS email_threads (
   state           text NOT NULL DEFAULT 'outreach_sent',
   approval_mode   text NOT NULL DEFAULT 'manual',
   closed_reason   text,
+  closed_outcome  text,
   created_at      timestamptz NOT NULL DEFAULT now(),
   updated_at      timestamptz NOT NULL DEFAULT now()
 );

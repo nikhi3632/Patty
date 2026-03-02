@@ -10,13 +10,15 @@ import {
   Loader2,
   AlertTriangle,
   Info,
+  XCircle,
+  CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import type { EmailThread, EmailMessage } from "@/lib/api";
-import { approveDraft, runAgent } from "@/lib/api";
+import { approveDraft, updateThreadMode, closeThread } from "@/lib/api";
 
 interface Props {
   thread: EmailThread;
@@ -37,6 +39,7 @@ export default function ThreadDetail({
   const [editSubject, setEditSubject] = useState("");
   const [editBody, setEditBody] = useState("");
   const [sending, setSending] = useState(false);
+  const [closing, setClosing] = useState(false);
 
   // Find the pending draft (has draft_body but no final_body)
   const draft = thread.messages.find((m) => m.draft_body && !m.final_body);
@@ -66,6 +69,16 @@ export default function ThreadDetail({
     }
   }
 
+  async function handleClose() {
+    setClosing(true);
+    try {
+      await closeThread(thread.id, "Closed by owner", "owner_closed");
+      onUpdate();
+    } finally {
+      setClosing(false);
+    }
+  }
+
   // Conversation messages (exclude pending drafts from the timeline)
   const timeline = thread.messages.filter(
     (m) => !(m.draft_body && !m.final_body)
@@ -89,9 +102,25 @@ export default function ThreadDetail({
             {thread.suppliers?.email}
           </p>
         </div>
-        <Badge variant="outline" className="text-[10px] shrink-0">
-          {thread.state.replace("_", " ")}
-        </Badge>
+        <div className="flex items-center gap-2 shrink-0">
+          <Badge variant="outline" className="text-[10px]">
+            {thread.state.replace("_", " ")}
+          </Badge>
+          <button
+            onClick={async () => {
+              const next = thread.approval_mode === "auto" ? "manual" : "auto";
+              await updateThreadMode(thread.id, next);
+              onUpdate();
+            }}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors ${
+              thread.approval_mode === "auto"
+                ? "bg-green-100 text-green-700 hover:bg-green-200"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            {thread.approval_mode === "auto" ? "Auto" : "Manual"}
+          </button>
+        </div>
       </div>
 
       {/* Conversation timeline */}
@@ -111,6 +140,26 @@ export default function ThreadDetail({
           {thread.messages.find((m) => m.agent_reasoning && !m.draft_body) && (
             <p className="text-xs text-red-600">
               {thread.messages.find((m) => m.agent_reasoning && !m.draft_body)?.agent_reasoning}
+            </p>
+          )}
+        </div>
+      )}
+
+      {/* Closed notice */}
+      {thread.state === "closed" && (
+        <div className="rounded-md border border-muted bg-muted/30 p-3 space-y-1">
+          <div className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-muted-foreground" />
+            <span className="text-sm font-medium">Closed</span>
+            {thread.closed_outcome && (
+              <Badge variant="outline" className="text-[10px]">
+                {thread.closed_outcome.replace("_", " ")}
+              </Badge>
+            )}
+          </div>
+          {thread.closed_reason && (
+            <p className="text-xs text-muted-foreground">
+              {thread.closed_reason}
             </p>
           )}
         </div>
@@ -216,6 +265,24 @@ export default function ThreadDetail({
             <Bot className="mr-1.5 h-3 w-3" />
           )}
           {agentRunning ? "Agent is thinking..." : "Generate Draft Reply"}
+        </Button>
+      )}
+
+      {/* Close thread button — visible on all non-closed threads */}
+      {thread.state !== "closed" && (
+        <Button
+          size="sm"
+          variant="ghost"
+          className="w-full text-muted-foreground hover:text-red-600"
+          disabled={closing}
+          onClick={handleClose}
+        >
+          {closing ? (
+            <Loader2 className="mr-1.5 h-3 w-3 animate-spin" />
+          ) : (
+            <XCircle className="mr-1.5 h-3 w-3" />
+          )}
+          Close Conversation
         </Button>
       )}
     </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useState } from "react";
 import {
   MessageSquare,
   Clock,
@@ -13,16 +13,15 @@ import {
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import type { EmailThread } from "@/lib/api";
-import { runAgent } from "@/lib/api";
+import { runAgent, updateThreadMode } from "@/lib/api";
 import ThreadDetail from "./thread-detail";
 
 interface Props {
   threads: EmailThread[];
   onUpdate: () => void;
-  visible: boolean;
+  selectedThreadId?: string | null;
+  onClearSelection?: () => void;
 }
-
-const REFRESH_INTERVAL = 15_000; // 15s auto-refresh when tab is active
 
 const stateLabels: Record<string, string> = {
   draft_ready: "Draft Ready",
@@ -40,23 +39,18 @@ const stateIcons: Record<string, React.ReactNode> = {
   closed: <CheckCircle className="h-3.5 w-3.5 text-muted-foreground" />,
 };
 
-export default function ThreadSection({ threads, onUpdate, visible }: Props) {
+export default function ThreadSection({ threads, onUpdate, selectedThreadId, onClearSelection }: Props) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [agentRunning, setAgentRunning] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  // Auto-refresh threads while the conversations tab is visible
+  // Auto-select thread from notification deep link
   useEffect(() => {
-    if (visible) {
-      intervalRef.current = setInterval(() => {
-        onUpdate();
-      }, REFRESH_INTERVAL);
+    if (selectedThreadId) {
+      setSelectedId(selectedThreadId);
+      onClearSelection?.();
     }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [visible, onUpdate]);
+  }, [selectedThreadId, onClearSelection]);
 
   const selected = threads.find((t) => t.id === selectedId);
 
@@ -131,6 +125,7 @@ export default function ThreadSection({ threads, onUpdate, visible }: Props) {
           label="Needs Review"
           threads={draftReady}
           onSelect={setSelectedId}
+          onUpdate={onUpdate}
           agentRunning={agentRunning}
         />
       )}
@@ -140,6 +135,7 @@ export default function ThreadSection({ threads, onUpdate, visible }: Props) {
           label="Escalated"
           threads={escalated}
           onSelect={setSelectedId}
+          onUpdate={onUpdate}
           agentRunning={agentRunning}
         />
       )}
@@ -149,6 +145,7 @@ export default function ThreadSection({ threads, onUpdate, visible }: Props) {
           label="Waiting for Reply"
           threads={waiting}
           onSelect={setSelectedId}
+          onUpdate={onUpdate}
           agentRunning={agentRunning}
           onRunAgent={handleRunAgent}
         />
@@ -159,6 +156,7 @@ export default function ThreadSection({ threads, onUpdate, visible }: Props) {
           label="Closed"
           threads={closed}
           onSelect={setSelectedId}
+          onUpdate={onUpdate}
           agentRunning={agentRunning}
         />
       )}
@@ -170,12 +168,14 @@ function ThreadGroup({
   label,
   threads,
   onSelect,
+  onUpdate,
   agentRunning,
   onRunAgent,
 }: {
   label: string;
   threads: EmailThread[];
   onSelect: (id: string) => void;
+  onUpdate: () => void;
   agentRunning: string | null;
   onRunAgent?: (id: string) => void;
 }) {
@@ -189,6 +189,7 @@ function ThreadGroup({
           key={thread.id}
           thread={thread}
           onClick={() => onSelect(thread.id)}
+          onUpdate={onUpdate}
           agentRunning={agentRunning === thread.id}
           onRunAgent={onRunAgent ? () => onRunAgent(thread.id) : undefined}
         />
@@ -200,11 +201,13 @@ function ThreadGroup({
 function ThreadRow({
   thread,
   onClick,
+  onUpdate,
   agentRunning,
   onRunAgent,
 }: {
   thread: EmailThread;
   onClick: () => void;
+  onUpdate: () => void;
   agentRunning: boolean;
   onRunAgent?: () => void;
 }) {
@@ -238,6 +241,21 @@ function ThreadRow({
               Draft
             </Badge>
           )}
+          <button
+            onClick={async (e) => {
+              e.stopPropagation();
+              const next = thread.approval_mode === "auto" ? "manual" : "auto";
+              await updateThreadMode(thread.id, next);
+              onUpdate();
+            }}
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium transition-colors shrink-0 ${
+              thread.approval_mode === "auto"
+                ? "bg-green-100 text-green-700 hover:bg-green-200"
+                : "bg-muted text-muted-foreground hover:bg-muted/80"
+            }`}
+          >
+            {thread.approval_mode === "auto" ? "Auto" : "Manual"}
+          </button>
         </div>
         <p className="truncate text-xs text-muted-foreground mt-0.5">
           {lastMessage
@@ -249,6 +267,12 @@ function ThreadRow({
         {thread.state === "escalated" && escalationMsg && (
           <p className="truncate text-xs text-red-500 mt-0.5">
             {escalationMsg.agent_reasoning}
+          </p>
+        )}
+        {thread.state === "closed" && thread.closed_reason && (
+          <p className="truncate text-xs text-muted-foreground mt-0.5">
+            {thread.closed_outcome ? `${thread.closed_outcome.replace("_", " ")}: ` : ""}
+            {thread.closed_reason}
           </p>
         )}
       </div>
