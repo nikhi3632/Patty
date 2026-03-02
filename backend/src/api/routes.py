@@ -875,9 +875,11 @@ def run_agent_and_maybe_send(thread_id: str):
 def auto_send_draft(supabase_client, thread_id, msg_id, agent_result, thread_data):
     """Send an agent draft automatically (auto mode). Same logic as approve endpoint."""
     import base64 as b64_mod
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
-    from src.core.email.gmail_client import get_gmail_service
+    from src.core.email.gmail_client import (
+        get_gmail_service,
+        get_last_message_id,
+        build_reply_mime,
+    )
 
     supplier = (
         supabase_client.table("suppliers")
@@ -893,12 +895,17 @@ def auto_send_draft(supabase_client, thread_id, msg_id, agent_result, thread_dat
         logger.warning("Auto-send failed for %s: Gmail not configured", thread_id)
         return
 
-    msg = MIMEMultipart("alternative")
-    msg["to"] = to_email
-    msg["subject"] = agent_result["subject"]
-    msg.attach(MIMEText(agent_result["body"], "plain"))
-
     gmail_thread_id = thread_data.get("gmail_thread_id")
+
+    # Fetch threading headers from the last message in the thread
+    last_message_id = None
+    if gmail_thread_id:
+        last_message_id, _ = get_last_message_id(service, gmail_thread_id)
+
+    msg = build_reply_mime(
+        to_email, agent_result["subject"], agent_result["body"], last_message_id
+    )
+
     raw = b64_mod.urlsafe_b64encode(msg.as_bytes()).decode()
     send_body = {"raw": raw}
     if gmail_thread_id:
@@ -1093,22 +1100,26 @@ def approve_thread_draft(thread_id: str, payload: ApproveBody = ApproveBody()):
     to_email = get("TEST_EMAIL_OVERRIDE") or supplier.data["email"]
 
     # Send via Gmail
-    from src.core.email.gmail_client import get_gmail_service
+    from src.core.email.gmail_client import (
+        get_gmail_service,
+        get_last_message_id,
+        build_reply_mime,
+    )
     import base64
-    from email.mime.multipart import MIMEMultipart
-    from email.mime.text import MIMEText
 
     service = get_gmail_service()
     if not service:
         raise HTTPException(500, "Gmail API not configured")
 
-    msg = MIMEMultipart("alternative")
-    msg["to"] = to_email
-    msg["subject"] = final_subject
-    msg.attach(MIMEText(final_body, "plain"))
-
-    # Thread the reply by setting the Gmail threadId
     gmail_thread_id = thread.data.get("gmail_thread_id")
+
+    # Fetch threading headers from the last message in the thread
+    last_message_id = None
+    if gmail_thread_id:
+        last_message_id, _ = get_last_message_id(service, gmail_thread_id)
+
+    msg = build_reply_mime(to_email, final_subject, final_body, last_message_id)
+
     raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
     send_body = {"raw": raw}
     if gmail_thread_id:

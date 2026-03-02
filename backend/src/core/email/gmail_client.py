@@ -145,6 +145,54 @@ def extract_body(payload: dict) -> str:
     return ""
 
 
+def get_last_message_id(service, gmail_thread_id: str) -> tuple[str | None, str | None]:
+    """Get the Message-ID and Subject of the last message in a Gmail thread.
+
+    Returns (message_id, subject) for threading headers.
+    """
+    thread = (
+        service.users()
+        .threads()
+        .get(
+            userId="me",
+            id=gmail_thread_id,
+            format="metadata",
+            metadataHeaders=["Message-ID", "Subject"],
+        )
+        .execute()
+    )
+    messages = thread.get("messages", [])
+    if not messages:
+        return None, None
+
+    last_msg = messages[-1]
+    headers = {h["name"].lower(): h["value"] for h in last_msg["payload"]["headers"]}
+    return headers.get("message-id"), headers.get("subject")
+
+
+def build_reply_mime(to: str, subject: str, body: str, message_id: str | None = None):
+    """Build a MIME reply message with proper threading headers."""
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    msg = MIMEMultipart("alternative")
+    msg["to"] = to
+
+    # Ensure subject has Re: prefix for threading
+    if subject and not subject.lower().startswith("re:"):
+        msg["subject"] = f"Re: {subject}"
+    else:
+        msg["subject"] = subject
+
+    # Set threading headers
+    if message_id:
+        msg["In-Reply-To"] = message_id
+        msg["References"] = message_id
+
+    msg.attach(MIMEText(body, "plain"))
+    return msg
+
+
 def decode_base64(data: str) -> str:
     """Decode Gmail's URL-safe base64 encoded content."""
     return base64.urlsafe_b64decode(data).decode("utf-8", errors="replace")
