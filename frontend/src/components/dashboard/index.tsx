@@ -22,6 +22,7 @@ import {
   type StreamEvent,
 } from "@/lib/api";
 import { buildCommodityViewModels, partitionViewModels, titleCase, type CommodityViewModel } from "./commodity-data";
+import { supabase as sbClient } from "@/lib/supabase";
 import Sidebar, { type View } from "./sidebar";
 import Summary from "./summary";
 import Commodities from "./commodities";
@@ -86,6 +87,30 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
   useEffect(() => {
     load();
   }, [load]);
+
+  // Realtime: refresh threads instantly on DB changes
+  useEffect(() => {
+    const channel = sbClient
+      .channel("threads-realtime")
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "email_messages" },
+        () => {
+          listThreads(restaurantId).then((th) => setThreads(th.data)).catch(() => {});
+        },
+      )
+      .on(
+        "postgres_changes",
+        { event: "*", schema: "public", table: "email_threads" },
+        () => {
+          listThreads(restaurantId).then((th) => setThreads(th.data)).catch(() => {});
+        },
+      )
+      .subscribe();
+    return () => {
+      sbClient.removeChannel(channel);
+    };
+  }, [restaurantId]);
 
   // Start pipeline stream 2 when confirmed but data is missing
   const startPipeline = useCallback(() => {

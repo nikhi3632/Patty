@@ -109,3 +109,7 @@ CREATE TABLE IF NOT EXISTS notifications (
 
 CREATE INDEX IF NOT EXISTS idx_notifications_restaurant
   ON notifications(restaurant_id, read, created_at DESC);
+
+-- Enable Supabase Realtime for instant frontend updates
+ALTER PUBLICATION supabase_realtime ADD TABLE email_threads;
+ALTER PUBLICATION supabase_realtime ADD TABLE email_messages;
