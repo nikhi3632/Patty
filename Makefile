@@ -34,7 +34,7 @@ db-migrate:
 # Drop ALL tables and recreate schema
 db-reset:
 	@export $$(grep '^DATABASE_URL=' backend/.env | xargs) && \
-	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS emails, restaurant_suppliers, suppliers, trend_signals, commodity_calibrations, trends, menu_parses, restaurant_commodities, wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
+	psql "$$DATABASE_URL" -c "DROP TABLE IF EXISTS notifications, email_messages, email_threads, emails, restaurant_suppliers, suppliers, trend_signals, commodity_calibrations, trends, menu_parses, restaurant_commodities, wholesale_prices, commodity_prices, commodities, menu_files, restaurants CASCADE;"
 	$(MAKE) db-migrate
 
 # Seed static reference data (commodity registry + prices — slow, run once)
