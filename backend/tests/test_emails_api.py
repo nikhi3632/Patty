@@ -97,7 +97,9 @@ def test_update_email_not_found(mock_sb):
 def test_send_email_endpoint(mock_send):
     mock_send.return_value = {
         "sent": True,
-        "resend_id": "r-123",
+        "gmail_message_id": "msg-123",
+        "gmail_thread_id": "thread-456",
+        "thread_id": "t-001",
         "routed_to": "test@test.com",
     }
 

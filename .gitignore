@@ -44,6 +44,8 @@ yarn-error.log*
 
 # Secrets
 *.pem
+gmail_credentials.json
+token.json
 
 # Testing
 .coverage

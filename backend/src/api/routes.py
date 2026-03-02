@@ -8,7 +8,7 @@ from datetime import datetime, timezone, timedelta
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", ".."))
 
-from fastapi import APIRouter, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from src.db.client import supabase, create_supabase_client
@@ -24,7 +24,10 @@ from src.core.pricing.nass_client import fetch_and_store_nass
 from src.core.pricing.mars_client import fetch_and_store_mars
 from src.core.suppliers.finder import find_suppliers
 from src.core.email.drafter import draft_all_emails
+from src.config import get
 from src.core.email.sender import send_email
+from src.core.email.poller import poll_inbox
+from src.core.email.agent import run_procurement_agent
 
 logger = logging.getLogger(__name__)
 
@@ -596,7 +599,7 @@ def update_email(email_id: str, body: EmailUpdate):
 
 @router.post("/emails/{email_id}/send")
 def send_email_endpoint(email_id: str):
-    """Send an email via Resend."""
+    """Send an email via Gmail API."""
     result = send_email(supabase, email_id)
     if "error" in result:
         raise HTTPException(400, result["error"])
@@ -636,6 +639,226 @@ def generate_emails(restaurant_id: str):
     """Generate outreach emails for all suppliers with email addresses."""
     result = draft_all_emails(supabase, restaurant_id)
     return {"data": result}
+
+
+@router.get("/restaurants/{restaurant_id}/threads")
+def list_threads(restaurant_id: str):
+    """List email threads for a restaurant with supplier info and messages."""
+    threads = (
+        supabase.table("email_threads")
+        .select("*, suppliers(name, email, categories)")
+        .eq("restaurant_id", restaurant_id)
+        .order("updated_at", desc=True)
+        .execute()
+    )
+    thread_ids = [t["id"] for t in threads.data]
+    if not thread_ids:
+        return {"data": []}
+
+    messages = (
+        supabase.table("email_messages")
+        .select("*")
+        .in_("thread_id", thread_ids)
+        .order("created_at")
+        .execute()
+    )
+
+    msgs_by_thread = {}
+    for msg in messages.data:
+        msgs_by_thread.setdefault(msg["thread_id"], []).append(msg)
+
+    result = []
+    for t in threads.data:
+        t["messages"] = msgs_by_thread.get(t["id"], [])
+        result.append(t)
+
+    return {"data": result}
+
+
+@router.post("/email/poll")
+def poll_email_inbox():
+    """Poll Gmail for inbound replies to tracked threads."""
+    result = poll_inbox(supabase)
+    if "error" in result:
+        raise HTTPException(500, result["error"])
+    return {"data": result}
+
+
+@router.post("/email/webhook")
+async def gmail_webhook(request: Request):
+    """Receive Gmail push notifications via Google Pub/Sub.
+
+    Pub/Sub sends a JSON envelope with a base64-encoded message.
+    We decode it, verify it's a Gmail notification, then poll for new messages.
+    """
+    import base64 as b64
+
+    body = await request.json()
+    message = body.get("message", {})
+    data = message.get("data", "")
+
+    if data:
+        decoded = json.loads(b64.b64decode(data).decode("utf-8"))
+        logger.info("Gmail webhook: emailAddress=%s historyId=%s",
+                     decoded.get("emailAddress"), decoded.get("historyId"))
+
+    result = poll_inbox(supabase)
+    logger.info("Gmail webhook poll result: %s", result)
+    return {"ok": True}
+
+
+@router.post("/email/watch")
+def register_gmail_watch():
+    """Register Gmail push notifications via Pub/Sub watch.
+
+    Call this once to start, then every 7 days to renew.
+    """
+    from src.core.email.gmail_client import get_gmail_service
+
+    service = get_gmail_service()
+    if not service:
+        raise HTTPException(500, "Gmail API not configured")
+
+    result = service.users().watch(
+        userId="me",
+        body={
+            "topicName": "projects/project-88283f31-441d-41b5-a0f/topics/gmail-notifications",
+            "labelIds": ["INBOX"],
+        },
+    ).execute()
+
+    return {"data": result}
+
+
+@router.post("/email/threads/{thread_id}/run-agent")
+def run_agent_on_thread(thread_id: str):
+    """Run the procurement agent on a thread to draft a response."""
+    result = run_procurement_agent(supabase, thread_id)
+    if "error" in result:
+        raise HTTPException(400, result["error"])
+
+    # Store the draft or escalation on the thread
+    if result["action"] == "draft":
+        supabase.table("email_messages").insert(
+            {
+                "thread_id": thread_id,
+                "direction": "outbound",
+                "sender": get("FROM_EMAIL") or "anamnikhilesh@gmail.com",
+                "recipient": "",
+                "subject": result["subject"],
+                "body": "",
+                "draft_body": result["body"],
+                "agent_reasoning": result["reasoning"],
+            }
+        ).execute()
+        supabase.table("email_threads").update(
+            {"state": "draft_ready"}
+        ).eq("id", thread_id).execute()
+
+    elif result["action"] == "escalate":
+        supabase.table("email_threads").update(
+            {"state": "escalated"}
+        ).eq("id", thread_id).execute()
+
+    return {"data": result}
+
+
+class ApproveBody(BaseModel):
+    body: str | None = None
+    subject: str | None = None
+
+
+@router.post("/email/threads/{thread_id}/approve")
+def approve_thread_draft(thread_id: str, payload: ApproveBody = ApproveBody()):
+    """Approve (and optionally edit) the agent's draft, then send via Gmail."""
+    # Get the latest draft message
+    draft = (
+        supabase.table("email_messages")
+        .select("id, draft_body, subject, thread_id")
+        .eq("thread_id", thread_id)
+        .eq("direction", "outbound")
+        .not_.is_("draft_body", "null")
+        .is_("final_body", "null")
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+
+    if not draft.data:
+        raise HTTPException(404, "No pending draft for this thread")
+
+    draft_row = draft.data[0]
+    final_body = payload.body or draft_row["draft_body"]
+    final_subject = payload.subject or draft_row["subject"]
+    owner_edited = payload.body is not None or payload.subject is not None
+
+    # Get thread to find supplier email
+    thread = (
+        supabase.table("email_threads")
+        .select("supplier_id, gmail_thread_id")
+        .eq("id", thread_id)
+        .single()
+        .execute()
+    )
+    supplier = (
+        supabase.table("suppliers")
+        .select("email")
+        .eq("id", thread.data["supplier_id"])
+        .single()
+        .execute()
+    )
+    to_email = get("TEST_EMAIL_OVERRIDE") or supplier.data["email"]
+
+    # Send via Gmail
+    from src.core.email.gmail_client import get_gmail_service
+    import base64
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+
+    service = get_gmail_service()
+    if not service:
+        raise HTTPException(500, "Gmail API not configured")
+
+    msg = MIMEMultipart("alternative")
+    msg["to"] = to_email
+    msg["subject"] = final_subject
+    msg.attach(MIMEText(final_body, "plain"))
+
+    # Thread the reply by setting the Gmail threadId
+    gmail_thread_id = thread.data.get("gmail_thread_id")
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    send_body = {"raw": raw}
+    if gmail_thread_id:
+        send_body["threadId"] = gmail_thread_id
+
+    gmail_result = (
+        service.users().messages().send(userId="me", body=send_body).execute()
+    )
+
+    # Update the draft message with final sent data
+    now = datetime.now(timezone.utc).isoformat()
+    supabase.table("email_messages").update(
+        {
+            "final_body": final_body,
+            "subject": final_subject,
+            "recipient": to_email,
+            "gmail_message_id": gmail_result.get("id", ""),
+            "owner_edited": owner_edited,
+        }
+    ).eq("id", draft_row["id"]).execute()
+
+    # Update thread state back to waiting for reply
+    supabase.table("email_threads").update(
+        {"state": "waiting_reply", "updated_at": now}
+    ).eq("id", thread_id).execute()
+
+    return {
+        "data": {
+            "sent": True,
+            "gmail_message_id": gmail_result.get("id", ""),
+            "routed_to": to_email,
+        }
+    }
 
 
 # --- Restaurant Management ---

@@ -10,12 +10,14 @@ import {
   listSuppliers,
   listEmails,
   listCalibrations,
+  listThreads,
   subscribeToPipeline,
   refreshPrices,
   type Commodity,
   type Trend,
   type Supplier,
   type Email,
+  type EmailThread,
   type Calibration,
   type StreamEvent,
 } from "@/lib/api";
@@ -27,6 +29,7 @@ import CommodityCard from "./commodity-card";
 import EmailSection from "./email-section";
 import SupplierList from "./supplier-list";
 import MenuSection from "./menu-section";
+import ThreadSection from "./thread-section";
 
 interface Props {
   restaurantId: string;
@@ -41,6 +44,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
   const [trends, setTrends] = useState<Trend[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [emails, setEmails] = useState<Email[]>([]);
+  const [threads, setThreads] = useState<EmailThread[]>([]);
   const [calibrations, setCalibrations] = useState<Calibration[]>([]);
   const [systemView, setSystemView] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -58,18 +62,20 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
 
   const load = useCallback(async () => {
     try {
-      const [r, c, t, s, e] = await Promise.all([
+      const [r, c, t, s, e, th] = await Promise.all([
         getRestaurant(restaurantId),
         listCommodities(restaurantId),
         listTrends(restaurantId),
         listSuppliers(restaurantId),
         listEmails(restaurantId),
+        listThreads(restaurantId),
       ]);
       setConfirmed(r.data.confirmed_at !== null);
       setCommodities(c.data);
       setTrends(t.data);
       setSuppliers(s.data);
       setEmails(e.data);
+      setThreads(th.data);
     } finally {
       setLoading(false);
     }
@@ -174,6 +180,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
     trends: "Trends",
     suppliers: "Who's Nearby",
     outreach: "Reach Out",
+    conversations: "Conversations",
     menu: "Menu & Ingredients",
   };
 
@@ -392,6 +399,11 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
                 <EmailSection emails={emails} onUpdate={load} />
               )}
             </>
+          )}
+
+          {/* Conversations — procurement agent threads */}
+          {activeView === "conversations" && (
+            <ThreadSection threads={threads} onUpdate={load} visible={activeView === "conversations"} />
           )}
 
           {/* Menu & Ingredients — menu preview + review component */}

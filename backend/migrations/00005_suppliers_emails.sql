@@ -42,7 +42,8 @@ CREATE TABLE IF NOT EXISTS emails (
   body             text NOT NULL,
   body_original    text NOT NULL,
   status           text NOT NULL DEFAULT 'generated',
-  resend_id        text,
+  gmail_message_id text,
+  gmail_thread_id  text,
   generated_at     timestamptz NOT NULL DEFAULT now(),
   edited_at        timestamptz,
   sent_at          timestamptz

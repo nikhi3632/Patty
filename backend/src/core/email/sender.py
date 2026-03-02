@@ -1,7 +1,10 @@
 import sys
 import os
 import html
+import base64
 from datetime import datetime, timezone
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 from urllib.parse import quote_plus
 
 import httpx
@@ -10,6 +13,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "..", ".."))
 
 from src.config import get
 from src.core.http import safe_request
+from src.core.email.gmail_client import get_gmail_service
 
 
 def build_map_url(address: str, lat: float = None, lng: float = None) -> str:
@@ -218,7 +222,7 @@ def plain_to_html(
 
 
 def send_email(supabase_client, email_id: str) -> dict:
-    """Send an email via Resend API.
+    """Send an email via Gmail API.
 
     Respects TEST_EMAIL_OVERRIDE: if set, all emails route to that address
     instead of the real supplier. The stored to_email remains unchanged.
@@ -237,9 +241,9 @@ def send_email(supabase_client, email_id: str) -> dict:
     if email.data["status"] == "sent":
         return {"error": "Email already sent"}
 
-    resend_key = get("RESEND_API_KEY")
-    if not resend_key:
-        return {"error": "RESEND_API_KEY not configured"}
+    service = get_gmail_service()
+    if not service:
+        return {"error": "Gmail API not configured — missing credentials or token"}
 
     # Route to test email if override is set
     to_email = get("TEST_EMAIL_OVERRIDE") or email.data["to_email"]
@@ -279,36 +283,61 @@ def send_email(supabase_client, email_id: str) -> dict:
         restaurant_website=restaurant_website,
     )
 
-    with safe_request():
-        resp = httpx.post(
-            "https://api.resend.com/emails",
-            json={
-                "from": email.data["from_email"],
-                "to": [to_email],
-                "subject": email.data["subject"],
-                "text": email.data["body"],
-                "html": html_body,
-            },
-            headers={"Authorization": f"Bearer {resend_key}"},
-            timeout=30,
-        )
+    msg = MIMEMultipart("alternative")
+    msg["to"] = to_email
+    msg["subject"] = email.data["subject"]
+    msg.attach(MIMEText(email.data["body"], "plain"))
+    msg.attach(MIMEText(html_body, "html"))
 
-    if resp.status_code not in (200, 201):
-        return {"error": f"Resend API error: {resp.status_code} {resp.text}"}
+    raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
+    result = service.users().messages().send(userId="me", body={"raw": raw}).execute()
 
-    resend_id = resp.json().get("id")
+    gmail_message_id = result.get("id", "")
+    gmail_thread_id = result.get("threadId", "")
 
     now = datetime.now(timezone.utc).isoformat()
     supabase_client.table("emails").update(
         {
             "status": "sent",
-            "resend_id": resend_id,
+            "gmail_message_id": gmail_message_id,
+            "gmail_thread_id": gmail_thread_id,
             "sent_at": now,
         }
     ).eq("id", email_id).execute()
 
+    # Create thread and first message for the procurement agent
+    thread = (
+        supabase_client.table("email_threads")
+        .insert(
+            {
+                "restaurant_id": email.data["restaurant_id"],
+                "supplier_id": email.data["supplier_id"],
+                "gmail_thread_id": gmail_thread_id,
+                "state": "waiting_reply",
+                "approval_mode": "manual",
+            }
+        )
+        .execute()
+    )
+
+    thread_id = thread.data[0]["id"]
+    supabase_client.table("email_messages").insert(
+        {
+            "thread_id": thread_id,
+            "direction": "outbound",
+            "gmail_message_id": gmail_message_id,
+            "sender": email.data["from_email"],
+            "recipient": to_email,
+            "subject": email.data["subject"],
+            "body": email.data["body"],
+            "final_body": email.data["body"],
+        }
+    ).execute()
+
     return {
         "sent": True,
-        "resend_id": resend_id,
+        "gmail_message_id": gmail_message_id,
+        "gmail_thread_id": gmail_thread_id,
+        "thread_id": thread_id,
         "routed_to": to_email,
     }

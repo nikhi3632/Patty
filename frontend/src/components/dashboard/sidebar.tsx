@@ -4,6 +4,7 @@ import {
   TrendingDown,
   Users,
   Mail,
+  MessageSquare,
   UtensilsCrossed,
   Settings,
 } from "lucide-react";
@@ -12,6 +13,7 @@ export type View =
   | "trends"
   | "suppliers"
   | "outreach"
+  | "conversations"
   | "menu";
 
 const workflow: { id: View; icon: React.ReactNode; label: string }[] = [
@@ -19,6 +21,7 @@ const workflow: { id: View; icon: React.ReactNode; label: string }[] = [
   { id: "trends", icon: <TrendingDown className="h-4 w-4" />, label: "Trends" },
   { id: "suppliers", icon: <Users className="h-4 w-4" />, label: "Suppliers" },
   { id: "outreach", icon: <Mail className="h-4 w-4" />, label: "Reach Out" },
+  { id: "conversations", icon: <MessageSquare className="h-4 w-4" />, label: "Conversations" },
 ];
 
 

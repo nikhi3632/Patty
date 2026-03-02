@@ -160,7 +160,7 @@ Categories they supply: {supplier_cats}
 
 Write a professional email introducing the restaurant and inquiring about pricing for the categories this supplier covers."""
 
-    from_email = get("FROM_EMAIL") or "onboarding@resend.dev"
+    from_email = get("FROM_EMAIL") or "anamnikhilesh@gmail.com"
 
     client = anthropic.Anthropic(api_key=get("ANTHROPIC_API_KEY"))
 

@@ -317,6 +317,78 @@ export async function revertEmail(emailId: string) {
   });
 }
 
+// --- Threads (Procurement Agent) ---
+
+export interface EmailMessage {
+  id: string;
+  thread_id: string;
+  direction: "inbound" | "outbound";
+  gmail_message_id: string | null;
+  sender: string;
+  recipient: string;
+  subject: string | null;
+  body: string;
+  classified_intent: string | null;
+  agent_reasoning: string | null;
+  draft_body: string | null;
+  final_body: string | null;
+  owner_edited: boolean;
+  auto_sent: boolean;
+  created_at: string;
+}
+
+export interface EmailThread {
+  id: string;
+  restaurant_id: string;
+  supplier_id: string;
+  gmail_thread_id: string | null;
+  state: "outreach_sent" | "waiting_reply" | "draft_ready" | "escalated" | "approved" | "closed";
+  approval_mode: "manual" | "auto";
+  closed_reason: string | null;
+  created_at: string;
+  updated_at: string;
+  suppliers: {
+    name: string;
+    email: string;
+    categories: string[];
+  };
+  messages: EmailMessage[];
+}
+
+export async function listThreads(restaurantId: string) {
+  return json<{ data: EmailThread[] }>(
+    `/restaurants/${restaurantId}/threads`
+  );
+}
+
+export async function pollInbox() {
+  return json<{ data: { checked: number; new_replies: number } }>(
+    "/email/poll",
+    { method: "POST" }
+  );
+}
+
+export async function runAgent(threadId: string) {
+  return json<{ data: { action: string; subject?: string; body?: string; reasoning?: string; reason?: string } }>(
+    `/email/threads/${threadId}/run-agent`,
+    { method: "POST" }
+  );
+}
+
+export async function approveDraft(
+  threadId: string,
+  edits?: { subject?: string; body?: string }
+) {
+  return json<{ data: { sent: boolean; gmail_message_id: string; routed_to: string } }>(
+    `/email/threads/${threadId}/approve`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(edits ?? {}),
+    }
+  );
+}
+
 // --- Menu Files ---
 
 export interface MenuFile {

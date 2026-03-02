@@ -12,18 +12,19 @@ from src.core.email.sender import (
     return_value="http://testrestaurant.com",
 )
 @patch("src.core.email.sender.get")
-@patch("src.core.email.sender.httpx.post")
-def test_send_email_success(mock_post, mock_get, mock_lookup):
+@patch("src.core.email.sender.get_gmail_service")
+def test_send_email_success(mock_gmail, mock_get, mock_lookup):
     mock_get.side_effect = lambda k: {
-        "RESEND_API_KEY": "fake-key",
         "TEST_EMAIL_OVERRIDE": "test@test.com",
         "GOOGLE_PLACES_API_KEY": "fake-google-key",
     }.get(k, "")
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"id": "resend-123"}
-    mock_post.return_value = mock_resp
+    mock_service = MagicMock()
+    mock_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+        "id": "gmail-msg-123",
+        "threadId": "gmail-thread-456",
+    }
+    mock_gmail.return_value = mock_service
 
     mock_sb = MagicMock()
 
@@ -33,7 +34,7 @@ def test_send_email_success(mock_post, mock_get, mock_lookup):
         "restaurant_id": "r1",
         "supplier_id": "s1",
         "to_email": "supplier@real.com",
-        "from_email": "onboarding@resend.dev",
+        "from_email": "anamnikhilesh@gmail.com",
         "subject": "Pricing Inquiry",
         "body": "Hello...",
         "status": "generated",
@@ -56,6 +57,12 @@ def test_send_email_success(mock_post, mock_get, mock_lookup):
     mock_update = MagicMock()
     mock_update.data = [{"id": "e1", "status": "sent"}]
 
+    mock_thread_insert = MagicMock()
+    mock_thread_insert.data = [{"id": "thread-001"}]
+
+    mock_msg_insert = MagicMock()
+    mock_msg_insert.data = [{"id": "msg-001"}]
+
     def table_router(table_name):
         mock_t = MagicMock()
         if table_name == "emails":
@@ -67,39 +74,36 @@ def test_send_email_success(mock_post, mock_get, mock_lookup):
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif table_name == "suppliers":
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_supplier
+        elif table_name == "email_threads":
+            mock_t.insert.return_value.execute.return_value = mock_thread_insert
+        elif table_name == "email_messages":
+            mock_t.insert.return_value.execute.return_value = mock_msg_insert
         return mock_t
 
     mock_sb.table.side_effect = table_router
 
     result = send_email(mock_sb, "e1")
     assert result["sent"] is True
-    assert result["resend_id"] == "resend-123"
+    assert result["gmail_message_id"] == "gmail-msg-123"
+    assert result["gmail_thread_id"] == "gmail-thread-456"
+    assert result["thread_id"] == "thread-001"
     assert result["routed_to"] == "test@test.com"
-
-    # Verify Resend was called with test email and includes HTML with links
-    call_args = mock_post.call_args
-    payload = call_args[1]["json"]
-    assert payload["to"] == ["test@test.com"]
-    assert "html" in payload
-    assert "Test Restaurant" in payload["html"]
-    assert "freshfoods.com" in payload["html"]
-    assert "maps.googleapis.com" in payload["html"]
-    assert "testrestaurant.com" in payload["html"]
 
 
 @patch("src.core.email.sender.lookup_restaurant_website", return_value="")
 @patch("src.core.email.sender.get")
-@patch("src.core.email.sender.httpx.post")
-def test_send_email_no_override_uses_real_email(mock_post, mock_get, mock_lookup):
+@patch("src.core.email.sender.get_gmail_service")
+def test_send_email_no_override_uses_real_email(mock_gmail, mock_get, mock_lookup):
     mock_get.side_effect = lambda k: {
-        "RESEND_API_KEY": "fake-key",
         "TEST_EMAIL_OVERRIDE": "",
     }.get(k, "")
 
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"id": "resend-456"}
-    mock_post.return_value = mock_resp
+    mock_service = MagicMock()
+    mock_service.users.return_value.messages.return_value.send.return_value.execute.return_value = {
+        "id": "gmail-msg-789",
+        "threadId": "gmail-thread-012",
+    }
+    mock_gmail.return_value = mock_service
 
     mock_sb = MagicMock()
 
@@ -109,7 +113,7 @@ def test_send_email_no_override_uses_real_email(mock_post, mock_get, mock_lookup
         "restaurant_id": "r1",
         "supplier_id": "s2",
         "to_email": "supplier@real.com",
-        "from_email": "onboarding@resend.dev",
+        "from_email": "anamnikhilesh@gmail.com",
         "subject": "Hi",
         "body": "Hello",
         "status": "draft",
@@ -129,6 +133,12 @@ def test_send_email_no_override_uses_real_email(mock_post, mock_get, mock_lookup
     mock_update = MagicMock()
     mock_update.data = [{"id": "e2", "status": "sent"}]
 
+    mock_thread_insert = MagicMock()
+    mock_thread_insert.data = [{"id": "thread-002"}]
+
+    mock_msg_insert = MagicMock()
+    mock_msg_insert.data = [{"id": "msg-002"}]
+
     def table_router(table_name):
         mock_t = MagicMock()
         if table_name == "emails":
@@ -140,6 +150,10 @@ def test_send_email_no_override_uses_real_email(mock_post, mock_get, mock_lookup
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_restaurant
         elif table_name == "suppliers":
             mock_t.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_supplier
+        elif table_name == "email_threads":
+            mock_t.insert.return_value.execute.return_value = mock_thread_insert
+        elif table_name == "email_messages":
+            mock_t.insert.return_value.execute.return_value = mock_msg_insert
         return mock_t
 
     mock_sb.table.side_effect = table_router
@@ -160,12 +174,9 @@ def test_send_email_already_sent():
     assert result["error"] == "Email already sent"
 
 
-@patch("src.core.email.sender.get")
-def test_send_email_no_resend_key(mock_get):
-    mock_get.side_effect = lambda k: {
-        "RESEND_API_KEY": "",
-        "TEST_EMAIL_OVERRIDE": "",
-    }.get(k, "")
+@patch("src.core.email.sender.get_gmail_service")
+def test_send_email_no_gmail_credentials(mock_gmail):
+    mock_gmail.return_value = None
 
     mock_sb = MagicMock()
 
@@ -175,7 +186,7 @@ def test_send_email_no_resend_key(mock_get):
     mock_sb.table.return_value.select.return_value.eq.return_value.single.return_value.execute.return_value = mock_email
 
     result = send_email(mock_sb, "e4")
-    assert result["error"] == "RESEND_API_KEY not configured"
+    assert result["error"] == "Gmail API not configured — missing credentials or token"
 
 
 # --- plain_to_html ---

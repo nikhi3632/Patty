@@ -85,7 +85,7 @@ def test_trend_summary_stable_skipped():
 def test_draft_email_success(mock_anthropic_cls, mock_get):
     mock_get.side_effect = lambda k: {
         "ANTHROPIC_API_KEY": "fake",
-        "FROM_EMAIL": "test@resend.dev",
+        "FROM_EMAIL": "test@gmail.com",
     }.get(k, "")
 
     mock_tool_block = MagicMock()
