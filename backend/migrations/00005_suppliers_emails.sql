@@ -113,3 +113,9 @@ CREATE INDEX IF NOT EXISTS idx_notifications_restaurant
 -- Enable Supabase Realtime for instant frontend updates
 ALTER PUBLICATION supabase_realtime ADD TABLE email_threads;
 ALTER PUBLICATION supabase_realtime ADD TABLE email_messages;
+
+-- RLS policies: allow anon SELECT so Realtime events reach the frontend
+ALTER TABLE email_threads ENABLE ROW LEVEL SECURITY;
+ALTER TABLE email_messages ENABLE ROW LEVEL SECURITY;
+CREATE POLICY realtime_select_threads ON email_threads FOR SELECT USING (true);
+CREATE POLICY realtime_select_messages ON email_messages FOR SELECT USING (true);

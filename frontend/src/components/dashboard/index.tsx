@@ -31,7 +31,7 @@ import EmailSection from "./email-section";
 import SupplierList from "./supplier-list";
 import MenuSection from "./menu-section";
 import ThreadSection from "./thread-section";
-import NotificationBell from "./notification-bell";
+// import NotificationBell from "./notification-bell";
 
 interface Props {
   restaurantId: string;
@@ -282,6 +282,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
             <p className="text-sm text-muted-foreground">Smarter purchasing starts here</p>
           </div>
           <div className="flex items-center gap-2">
+            {/* TODO: re-enable notifications
             <NotificationBell
               restaurantId={restaurantId}
               onNavigateToThread={(threadId) => {
@@ -289,6 +290,7 @@ export default function Dashboard({ restaurantId, onNewRestaurant }: Props) {
                 setSelectedThreadId(threadId);
               }}
             />
+            */}
             {onNewRestaurant && (
               <button
                 onClick={onNewRestaurant}
